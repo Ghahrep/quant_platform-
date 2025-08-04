@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect } from "react";
 
 export function useApi(apiFunction, dependencies = []) {
   const [data, setData] = useState(null);
@@ -19,7 +19,7 @@ export function useApi(apiFunction, dependencies = []) {
         }
       } catch (err) {
         if (isMounted) {
-          setError(err.message || 'An error occurred');
+          setError(err.message || "An error occurred");
         }
       } finally {
         if (isMounted) {

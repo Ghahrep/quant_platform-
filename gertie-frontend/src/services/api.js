@@ -1,10 +1,10 @@
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
-const ENABLE_MOCK = import.meta.env.VITE_ENABLE_MOCK_DATA === 'true';
+const ENABLE_MOCK = import.meta.env.VITE_ENABLE_MOCK_DATA === "true";
 
 class ApiError extends Error {
   constructor(message, status, data) {
     super(message);
-    this.name = 'ApiError';
+    this.name = "ApiError";
     this.status = status;
     this.data = data;
   }
@@ -16,7 +16,7 @@ const apiClient = {
     const url = `${API_BASE_URL}${endpoint}`;
     const config = {
       headers: {
-        'Content-Type': 'application/json',
+        "Content-Type": "application/json",
         ...options.headers,
       },
       ...options,
@@ -28,9 +28,9 @@ const apiClient = {
 
       if (!response.ok) {
         throw new ApiError(
-          data.message || 'API request failed',
+          data.message || "API request failed",
           response.status,
-          data
+          data,
         );
       }
 
@@ -39,17 +39,17 @@ const apiClient = {
       if (error instanceof ApiError) {
         throw error;
       }
-      throw new ApiError('Network error', 0, null);
+      throw new ApiError("Network error", 0, null);
     }
   },
 
   get(endpoint, options = {}) {
-    return this.request(endpoint, { method: 'GET', ...options });
+    return this.request(endpoint, { method: "GET", ...options });
   },
 
   post(endpoint, data, options = {}) {
     return this.request(endpoint, {
-      method: 'POST',
+      method: "POST",
       body: JSON.stringify(data),
       ...options,
     });
@@ -64,7 +64,7 @@ export const portfolioService = {
         /* mock data */
       };
     }
-    return apiClient.get('/portfolio/overview');
+    return apiClient.get("/portfolio/overview");
   },
 
   async getRiskMetrics() {
@@ -73,16 +73,16 @@ export const portfolioService = {
         /* mock data */
       };
     }
-    return apiClient.get('/portfolio/risk-metrics');
+    return apiClient.get("/portfolio/risk-metrics");
   },
 };
 
 export const analyticsService = {
   async getHurstExponent(data) {
     if (ENABLE_MOCK) {
-      return { hurst_exponent: 0.42, interpretation: 'mean-reverting' };
+      return { hurst_exponent: 0.42, interpretation: "mean-reverting" };
     }
-    return apiClient.post('/analysis/fractal/hurst-exponent', { data });
+    return apiClient.post("/analysis/fractal/hurst-exponent", { data });
   },
 
   async getGarchForecast(data) {
@@ -91,6 +91,6 @@ export const analyticsService = {
         /* mock forecast data */
       };
     }
-    return apiClient.post('/analysis/garch/forecast', { data });
+    return apiClient.post("/analysis/garch/forecast", { data });
   },
 };
