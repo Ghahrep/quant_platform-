@@ -1,0 +1,31 @@
+# FastAPI Server
+fastapi
+uvicorn[standard]
+
+# Core Data & Math Libraries
+numpy
+pandas
+scipy
+matplotlib
+
+# Quantitative Analysis Libraries
+fbm
+arch
+hmmlearn
+# You might need a specific library for DFA/Multifractal, e.g., MFDFA
+mdfa
+
+# (Optional, for later) Portfolio Analysis
+# PyPortfolioOpt
+# backtesting.py
+
+#financial api
+yfinance 
+
+#aiAgents
+langchain
+langchain-community 
+
+#analysis dependencies 
+scikit-learn
+arch 
