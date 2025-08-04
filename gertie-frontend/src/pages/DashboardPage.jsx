@@ -12,10 +12,20 @@ import {
   Cell,
 } from "recharts";
 import { Bell } from "lucide-react";
-import { MetricCard, ChartCard, Card } from "../components/ui";
+// Correctly import UI components, including the new ones for loading/error states
 import {
-  portfolioOverview,
-  riskMetrics,
+  MetricCard,
+  ChartCard,
+  Card,
+  LoadingSpinner,
+  ErrorMessage,
+} from "../components/ui";
+// Import the custom hook to fetch data
+import { useRiskMetrics } from "../hooks/useRiskMetrics";
+// Re-add portfolioService for direct actions like manual refresh
+import { portfolioService } from "../services/api";
+// We are also removing the direct imports from the mockData file
+import {
   riskLevelData,
   riskAssessmentData,
   portfolioPerformanceData,
@@ -24,6 +34,7 @@ import {
   highAlert,
 } from "../data";
 
+// These components can stay as they are, since they use static data for now
 const RiskAssessmentGrid = () => {
   const getColor = (level) => {
     switch (level) {
@@ -39,7 +50,6 @@ const RiskAssessmentGrid = () => {
         return "bg-slate-700";
     }
   };
-
   return (
     <Card>
       <h3 className="text-slate-300 text-lg font-semibold mb-4">
@@ -94,26 +104,57 @@ const HoldingsTable = () => (
   </Card>
 );
 
+// The main DashboardPage component is now refactored
 export const DashboardPage = () => {
+  // 1. Call the custom hook to get data, loading, and error states
+  const { data: riskData, loading, error, refetch } = useRiskMetrics();
+
+  // This function demonstrates how to call a service directly, for example, from a button click
+  const handleRefreshPortfolio = async () => {
+    try {
+      // NOTE: This is just an example. The response isn't used in the UI yet.
+      // You would typically use this to update state.
+      console.log("Refreshing portfolio data...");
+      const overview = await portfolioService.getOverview("port_123");
+      console.log("Portfolio overview refreshed:", overview);
+      // You could potentially call the hook's refetch function here as well
+      refetch();
+    } catch (error) {
+      console.error("Failed to refresh portfolio:", error);
+    }
+  };
+
+  // 2. Handle loading and error states for a better user experience
+  if (loading) {
+    return (
+      <div className="flex justify-center items-center h-full">
+        <LoadingSpinner size="lg" />
+      </div>
+    );
+  }
+
+  if (error) {
+    return <ErrorMessage error={error} onRetry={refetch} />;
+  }
+
+  // 3. If data has loaded, render the component with the fetched data
   return (
     <>
       <div className="lg:hidden">
-        <MetricCard
-          title="Total Value"
-          value={`$${portfolioOverview.totalValue.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
-          change={portfolioOverview.oneDayReturn}
-        />
+        {/* This data would come from a different hook, e.g., usePortfolioOverview */}
+        <MetricCard title="Total Value" value="$52,800.75" change={-0.004} />
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+        {/* 4. Replace static mock data with data from our hook */}
         <MetricCard
           title="Overall Risk"
           value="Moderate"
-          subValue={riskMetrics.overallRiskScore.toFixed(1)}
+          subValue={riskData?.overallRiskScore?.toFixed(1) || "N/A"}
         />
         <MetricCard
           title="Value at Risk"
-          value={`$${riskMetrics.valueAtRisk.toLocaleString()}`}
+          value={`$${(riskData?.valueAtRisk || 0).toLocaleString()}`}
           subValue="95% Confidence"
         />
 

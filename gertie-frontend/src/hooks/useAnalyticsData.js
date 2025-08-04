@@ -1,0 +1,134 @@
+import { useState, useEffect } from "react";
+import { analyticsService } from "../services/api";
+
+// A utility function to ensure all numbers in an array are valid
+const cleanArray = (arr) => arr.filter((n) => Number.isFinite(n));
+
+// Function to generate more realistic, GARCH-like returns
+const generateGarchLikeReturns = (numPoints = 100) => {
+  const returns = new Array(numPoints).fill(0);
+  let sigma = new Array(numPoints).fill(0);
+  sigma[0] = 0.01; // Initial volatility
+
+  const alpha1 = 0.1;
+  const beta1 = 0.85;
+  const omega = 0.00001;
+
+  for (let i = 1; i < numPoints; i++) {
+    sigma[i] = Math.sqrt(
+      omega +
+        alpha1 * Math.pow(returns[i - 1], 2) +
+        beta1 * Math.pow(sigma[i - 1], 2)
+    );
+    const randn =
+      Math.sqrt(-2 * Math.log(1 - Math.random())) *
+      Math.cos(2 * Math.PI * Math.random());
+    returns[i] = sigma[i] * randn;
+  }
+  return returns;
+};
+
+export const useAnalyticsData = () => {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  const fetchAnalyticsData = async () => {
+    try {
+      setLoading(true);
+      setError(null);
+
+      const mockReturns = generateGarchLikeReturns(100);
+
+      // --- MODIFIED: Add a safeguard inside the reduce function ---
+      const mockTimeSeries = mockReturns.reduce(
+        (acc, r) => {
+          const nextVal = acc[acc.length - 1] * Math.exp(r);
+          // This check prevents the array from containing Infinity
+          if (!Number.isFinite(nextVal)) {
+            return acc;
+          }
+          return [...acc, nextVal];
+        },
+        [100]
+      );
+      // --- END of MODIFICATION ---
+
+      const cleanedTimeSeries = cleanArray(mockTimeSeries);
+      const cleanedReturns = cleanArray(mockReturns);
+
+      if (cleanedTimeSeries.length < 50 || cleanedReturns.length < 50) {
+        throw new Error("Insufficient valid data generated for analysis.");
+      }
+
+      const results = await Promise.allSettled([
+        analyticsService.getHurstExponent(cleanedTimeSeries),
+        analyticsService.getGarchForecast(cleanedReturns, 30),
+        analyticsService.detectRegimes({ returns: cleanedReturns }, 3),
+      ]);
+
+      const [hurstResult, garchResult, regimeResult] = results;
+
+      const finalData = {};
+      const errors = [];
+
+      if (
+        hurstResult.status === "fulfilled" &&
+        hurstResult.value.hurst_exponent
+      ) {
+        finalData.hurst = hurstResult.value;
+      } else {
+        errors.push("Hurst Exponent");
+        console.error(
+          "Hurst fetch failed or returned invalid data:",
+          hurstResult.reason || hurstResult.value
+        );
+      }
+
+      if (
+        garchResult.status === "fulfilled" &&
+        garchResult.value?.data?.forecast_volatility
+      ) {
+        finalData.garch = garchResult.value.data;
+      } else {
+        errors.push("GARCH Forecast");
+        console.error(
+          "GARCH fetch failed or returned invalid data:",
+          garchResult.reason || garchResult.value
+        );
+      }
+
+      if (
+        regimeResult.status === "fulfilled" &&
+        regimeResult.value?.data?.regime_characteristics
+      ) {
+        finalData.regime = regimeResult.value.data;
+      } else {
+        errors.push("Market Regime");
+        console.error(
+          "Regime fetch failed or returned invalid data:",
+          regimeResult.reason || regimeResult.value
+        );
+      }
+
+      setData(finalData);
+
+      if (errors.length > 0) {
+        setError(`Failed to fetch or process: ${errors.join(", ")}.`);
+      }
+    } catch (err) {
+      const errorMessage =
+        err.data?.error?.message || err.message || "An unknown error occurred.";
+      setError(`Failed to fetch analytics data: ${errorMessage}`);
+      console.error("Analytics data fetch error:", err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchAnalyticsData();
+  }, []);
+
+  return { data, loading, error, refetch: fetchAnalyticsData };
+};
