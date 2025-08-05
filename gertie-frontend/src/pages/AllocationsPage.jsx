@@ -1,11 +1,15 @@
 import React, { useState } from "react";
 import { PieChart, Pie, Sector, ResponsiveContainer, Cell } from "recharts";
-import { ChartCard, Card } from "../components/ui";
+// Import UI components and the new custom hook
 import {
-  allocationByCategoryData,
-  optimizationSuggestions,
-  CHART_COLORS,
-} from "../data";
+  ChartCard,
+  Card,
+  LoadingSpinner,
+  ErrorMessage,
+} from "../components/ui";
+import { useAllocationsData } from "../hooks/useAllocationsData";
+// CHART_COLORS would typically be defined in a constants file
+const CHART_COLORS = ["#3b82f6", "#facc15", "#10b981", "#f97316", "#8b5cf6"];
 
 const ActiveShape = (props) => {
   const {
@@ -64,6 +68,26 @@ export const AllocationsPage = () => {
   const [activeIndex, setActiveIndex] = useState(0);
   const onPieEnter = (_, index) => setActiveIndex(index);
 
+  // 1. Call the custom hook to get data, loading, and error states
+  const { data, loading, error, refetch } = useAllocationsData();
+
+  // 2. Handle loading and error states
+  if (loading) {
+    return (
+      <div className="flex justify-center items-center h-full">
+        <LoadingSpinner size="lg" text="Loading Allocation Data..." />
+      </div>
+    );
+  }
+
+  if (error) {
+    return <ErrorMessage error={error} onRetry={refetch} />;
+  }
+
+  // 3. Use the data from the hook
+  const allocationByCategoryData = data?.byCategory || [];
+  const optimizationSuggestions = data?.optimizationSuggestion || {};
+
   return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
       <ChartCard title="Allocation by Category" className="lg:h-[450px]">
@@ -98,7 +122,7 @@ export const AllocationsPage = () => {
         </h3>
         <div className="space-y-4 text-slate-300">
           <p className="bg-slate-700/50 p-3 rounded-lg border border-slate-600">
-            {optimizationSuggestions.rationale}
+            {optimizationSuggestions.rationale || "No suggestion available."}
           </p>
           <div>
             <h4 className="font-semibold text-slate-400 mb-2">
@@ -108,16 +132,16 @@ export const AllocationsPage = () => {
               <span className="text-green-400">
                 Risk Reduction:{" "}
                 {(
-                  optimizationSuggestions.expected_improvement.risk_reduction *
-                  100
+                  (optimizationSuggestions.expected_improvement
+                    ?.risk_reduction || 0) * 100
                 ).toFixed(1)}
                 %
               </span>
               <span className="text-red-400">
                 Return Change:{" "}
                 {(
-                  optimizationSuggestions.expected_improvement
-                    .expected_return_change * 100
+                  (optimizationSuggestions.expected_improvement
+                    ?.expected_return_change || 0) * 100
                 ).toFixed(1)}
                 %
               </span>

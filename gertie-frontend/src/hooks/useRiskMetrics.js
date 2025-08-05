@@ -1,5 +1,6 @@
+// src/hooks/useRiskMetrics.js
 import { useState, useEffect } from "react";
-import { portfolioService, analyticsService } from "../services/api";
+import { riskService } from "../services/api";
 
 export const useRiskMetrics = () => {
   const [data, setData] = useState(null);
@@ -11,10 +12,16 @@ export const useRiskMetrics = () => {
       setLoading(true);
       setError(null);
 
-      // Get risk metrics and run stress test
-      const [riskResponse, stressResponse] = await Promise.all([
-        portfolioService.getRiskMetrics(),
-        analyticsService.runStressTest(
+      // Generate mock portfolio returns
+      const mockReturns = Array.from(
+        { length: 100 },
+        () => (Math.random() - 0.5) * 0.1
+      );
+
+      // Get risk metrics and stress test
+      const [cvarResponse, stressResponse] = await Promise.all([
+        riskService.calculateCVaR(mockReturns, 0.95),
+        riskService.runStressTest(
           {
             AAPL: 0.3,
             GOOGL: 0.25,
@@ -31,10 +38,11 @@ export const useRiskMetrics = () => {
       ]);
 
       setData({
-        cvar: riskResponse.data || riskResponse,
+        cvar: cvarResponse.data || cvarResponse,
         stressTest: stressResponse.data || stressResponse,
         overallRiskScore: 3.2,
-        valueAtRisk: riskResponse.data?.cvar_estimate || 25400.0,
+        valueAtRisk:
+          Math.abs(cvarResponse.data?.cvar_estimate || -0.254) * 100000,
       });
     } catch (err) {
       setError(err.message);

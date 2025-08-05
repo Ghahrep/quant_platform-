@@ -39,20 +39,10 @@ export const useAnalyticsData = () => {
       setError(null);
 
       const mockReturns = generateGarchLikeReturns(100);
-
-      // --- MODIFIED: Add a safeguard inside the reduce function ---
       const mockTimeSeries = mockReturns.reduce(
-        (acc, r) => {
-          const nextVal = acc[acc.length - 1] * Math.exp(r);
-          // This check prevents the array from containing Infinity
-          if (!Number.isFinite(nextVal)) {
-            return acc;
-          }
-          return [...acc, nextVal];
-        },
+        (acc, r) => [...acc, acc[acc.length - 1] * Math.exp(r)],
         [100]
       );
-      // --- END of MODIFICATION ---
 
       const cleanedTimeSeries = cleanArray(mockTimeSeries);
       const cleanedReturns = cleanArray(mockReturns);
@@ -61,6 +51,7 @@ export const useAnalyticsData = () => {
         throw new Error("Insufficient valid data generated for analysis.");
       }
 
+      // --- MODIFIED: Use Promise.allSettled to handle partial failures ---
       const results = await Promise.allSettled([
         analyticsService.getHurstExponent(cleanedTimeSeries),
         analyticsService.getGarchForecast(cleanedReturns, 30),
@@ -72,50 +63,34 @@ export const useAnalyticsData = () => {
       const finalData = {};
       const errors = [];
 
-      if (
-        hurstResult.status === "fulfilled" &&
-        hurstResult.value.hurst_exponent
-      ) {
+      // Check each result individually
+      if (hurstResult.status === "fulfilled") {
         finalData.hurst = hurstResult.value;
       } else {
         errors.push("Hurst Exponent");
-        console.error(
-          "Hurst fetch failed or returned invalid data:",
-          hurstResult.reason || hurstResult.value
-        );
+        console.error("Hurst fetch failed:", hurstResult.reason);
       }
 
-      if (
-        garchResult.status === "fulfilled" &&
-        garchResult.value?.data?.forecast_volatility
-      ) {
-        finalData.garch = garchResult.value.data;
+      if (garchResult.status === "fulfilled") {
+        finalData.garch = garchResult.value.data || garchResult.value;
       } else {
         errors.push("GARCH Forecast");
-        console.error(
-          "GARCH fetch failed or returned invalid data:",
-          garchResult.reason || garchResult.value
-        );
+        console.error("GARCH fetch failed:", garchResult.reason);
       }
 
-      if (
-        regimeResult.status === "fulfilled" &&
-        regimeResult.value?.data?.regime_characteristics
-      ) {
-        finalData.regime = regimeResult.value.data;
+      if (regimeResult.status === "fulfilled") {
+        finalData.regime = regimeResult.value.data || regimeResult.value;
       } else {
         errors.push("Market Regime");
-        console.error(
-          "Regime fetch failed or returned invalid data:",
-          regimeResult.reason || regimeResult.value
-        );
+        console.error("Regime fetch failed:", regimeResult.reason);
       }
 
       setData(finalData);
 
       if (errors.length > 0) {
-        setError(`Failed to fetch or process: ${errors.join(", ")}.`);
+        setError(`Failed to fetch: ${errors.join(", ")}.`);
       }
+      // --- END of MODIFICATION ---
     } catch (err) {
       const errorMessage =
         err.data?.error?.message || err.message || "An unknown error occurred.";

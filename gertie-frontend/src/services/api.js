@@ -374,6 +374,46 @@ export const aiService = {
   },
 };
 
+export const riskService = {
+  async calculateCVaR(portfolioReturns, confidenceLevel = 0.95) {
+    if (ENABLE_MOCK) {
+      return {
+        success: true,
+        data: {
+          cvar_estimate: -0.254,
+          confidence_level: confidenceLevel,
+          computation_time_ms: 145,
+        },
+      };
+    }
+    return apiClient.post("/api/v1/analysis/risk/cvar", {
+      portfolio_returns: portfolioReturns,
+      confidence_level: confidenceLevel,
+    });
+  },
+
+  async runStressTest(portfolioPositions, stressScenarios) {
+    if (ENABLE_MOCK) {
+      return {
+        success: true,
+        data: {
+          scenario_results: [
+            {
+              scenario_name: "market_crash_2008",
+              portfolio_loss: -285000,
+              loss_percentage: -28.5,
+            },
+          ],
+        },
+      };
+    }
+    return apiClient.post("/api/v1/analysis/risk/stress-test", {
+      portfolio_positions: portfolioPositions,
+      stress_scenarios: stressScenarios,
+    });
+  },
+};
+
 export const utilityService = {
   async healthCheck() {
     return apiClient.get(API_ENDPOINTS.HEALTH);

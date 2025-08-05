@@ -5,6 +5,7 @@ import {
   BarChart2,
   Bell,
   Settings,
+  FolderKanban,
 } from "lucide-react";
 import { GertieLogo } from "../ui";
 
@@ -13,6 +14,7 @@ export const Sidebar = ({ activeView, setActiveView }) => {
     { name: "Overview", icon: LayoutDashboard },
     { name: "Analytics", icon: BarChart2 },
     { name: "Allocations", icon: Shield },
+    { name: "Portfolio", icon: FolderKanban },
     { name: "Alerts", icon: Bell },
   ];
 

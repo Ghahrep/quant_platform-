@@ -1,48 +1,36 @@
 import React, { useState, useEffect, useRef } from "react";
 import { Bot, X, Send } from "lucide-react";
+// 1. Import the new useAIChat hook
+import { useAIChat } from "../hooks/useAIChat";
 
 export const AIAgentChat = ({ isChatOpen, setChatOpen }) => {
-  const [messages, setMessages] = useState([
-    {
-      from: "ai",
-      text: "Hello! I'm Gertie, your AI risk companion. How can I help you analyze your portfolio today?",
-    },
-  ]);
+  // 2. Replace local state management with the useAIChat hook
+  const { messages, loading, sendMessage, getAISystemStatus } = useAIChat();
   const [input, setInput] = useState("");
-  const [isTyping, setIsTyping] = useState(false);
+  const [aiStatus, setAiStatus] = useState("unknown");
   const chatEndRef = useRef(null);
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
+  // Check AI system status when the chat window is opened
+  useEffect(() => {
+    if (isChatOpen) {
+      getAISystemStatus().then((status) => {
+        setAiStatus(status.status || "offline");
+      });
+    }
+  }, [isChatOpen, getAISystemStatus]);
+
+  // 3. Update the handleSend function to use the sendMessage function from the hook
   const handleSend = async (e) => {
     e.preventDefault();
-    if (!input.trim()) return;
+    if (!input.trim() || loading) return;
 
-    const userMessage = { from: "user", text: input };
-    setMessages((prev) => [...prev, userMessage]);
+    // This now calls the hook, which handles the API call and state updates
+    await sendMessage(input);
     setInput("");
-    setIsTyping(true);
-
-    // Mock API call to the orchestrator
-    setTimeout(() => {
-      setIsTyping(false);
-      // This is where you would call:
-      // fetch('/api/v1/ai/orchestrator/query', { method: 'POST', body: JSON.stringify({ query: input }) })
-      // And then process the response.
-      const responses = [
-        `Based on current market conditions, your portfolio shows moderate risk levels. The Hurst exponent of 0.42 indicates mean-reverting behavior.`,
-        `I've analyzed your query about "${input.slice(0, 30)}...". Your VaR is currently $25,400, which is within acceptable bounds.`,
-        `Looking at your risk metrics, I recommend maintaining your current allocation with a slight increase in cash reserves.`,
-        `Your portfolio performance has been steady. The GARCH model suggests volatility may increase in the coming weeks.`,
-      ];
-      const aiResponse = {
-        from: "ai",
-        text: responses[Math.floor(Math.random() * responses.length)],
-      };
-      setMessages((prev) => [...prev, aiResponse]);
-    }, 1200);
   };
 
   if (!isChatOpen) return null;
@@ -53,6 +41,16 @@ export const AIAgentChat = ({ isChatOpen, setChatOpen }) => {
         <div className="flex items-center space-x-2">
           <Bot className="text-yellow-400" />
           <h3 className="font-bold text-white">Gertie AI Assistant</h3>
+          {/* Optional: Show a status indicator for the AI system */}
+          <span
+            className={`w-2 h-2 rounded-full ${
+              aiStatus === "active"
+                ? "bg-green-400"
+                : aiStatus === "offline"
+                  ? "bg-red-400"
+                  : "bg-yellow-400"
+            }`}
+          ></span>
         </div>
         <button
           onClick={() => setChatOpen(false)}
@@ -78,7 +76,8 @@ export const AIAgentChat = ({ isChatOpen, setChatOpen }) => {
             </div>
           </div>
         ))}
-        {isTyping && (
+        {/* 4. Use the 'loading' state from the hook for the typing indicator */}
+        {loading && (
           <div className="flex justify-start">
             <div className="bg-slate-700 text-slate-200 rounded-xl rounded-bl-none p-3">
               <div className="flex space-x-1">
@@ -105,12 +104,12 @@ export const AIAgentChat = ({ isChatOpen, setChatOpen }) => {
             onChange={(e) => setInput(e.target.value)}
             placeholder="Ask about risk, strategy..."
             className="flex-1 bg-transparent p-3 text-slate-200 placeholder-slate-400 focus:outline-none"
-            disabled={isTyping}
+            disabled={loading}
           />
           <button
             type="submit"
             className="p-3 text-yellow-400 hover:text-yellow-300 disabled:text-slate-500"
-            disabled={!input.trim() || isTyping}
+            disabled={!input.trim() || loading}
           >
             <Send className="w-5 h-5" />
           </button>

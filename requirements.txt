@@ -1,6 +1,13 @@
-# FastAPI Server
+# FastAPI Server & Core Framework
 fastapi
 uvicorn[standard]
+
+# Authentication & Security
+python-jose[cryptography]  # JWT token handling
+passlib[bcrypt]           # Password hashing
+python-multipart          # Form data support
+pydantic-settings         # Environment configuration
+pydantic[email]           # Email validation
 
 # Core Data & Math Libraries
 numpy
@@ -9,23 +16,29 @@ scipy
 matplotlib
 
 # Quantitative Analysis Libraries
-fbm
-arch
-hmmlearn
-# You might need a specific library for DFA/Multifractal, e.g., MFDFA
-mdfa
+fbm                # Fractional Brownian Motion
+arch               # GARCH models and volatility
+hmmlearn           # Hidden Markov Models
+mdfa               # Multifractal Detrended Fluctuation Analysis
 
-# (Optional, for later) Portfolio Analysis
-# PyPortfolioOpt
-# backtesting.py
+# Financial Data & APIs
+yfinance           # Yahoo Finance API
 
-#financial api
-yfinance 
+# AI & LLM Integration
+langchain          # LLM framework
+langchain-community # Community integrations
+scikit-learn       # Machine learning utilities
 
-#aiAgents
-langchain
-langchain-community 
+# Development & Testing
+httpx              # HTTP client for testing (FastAPI TestClient)
+pytest             # Testing framework (optional)
+python-dotenv      # Environment variables
 
-#analysis dependencies 
-scikit-learn
-arch 
+# Optional: Advanced Portfolio Analysis (for Phase 2)
+# PyPortfolioOpt   # Portfolio optimization
+# backtesting      # Backtesting framework
+
+# Optional: Database (for production)
+# sqlalchemy       # Database ORM
+# psycopg2-binary  # PostgreSQL adapter
+# alembic          # Database migrations

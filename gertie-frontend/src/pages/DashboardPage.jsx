@@ -12,7 +12,6 @@ import {
   Cell,
 } from "recharts";
 import { Bell } from "lucide-react";
-// Correctly import UI components, including the new ones for loading/error states
 import {
   MetricCard,
   ChartCard,
@@ -20,11 +19,10 @@ import {
   LoadingSpinner,
   ErrorMessage,
 } from "../components/ui";
-// Import the custom hook to fetch data
 import { useRiskMetrics } from "../hooks/useRiskMetrics";
-// Re-add portfolioService for direct actions like manual refresh
 import { portfolioService } from "../services/api";
-// We are also removing the direct imports from the mockData file
+
+// Mock data is kept as a fallback in case the API fails
 import {
   riskLevelData,
   riskAssessmentData,
@@ -34,8 +32,8 @@ import {
   highAlert,
 } from "../data";
 
-// These components can stay as they are, since they use static data for now
 const RiskAssessmentGrid = () => {
+  // This component can remain as is if its data is static for now
   const getColor = (level) => {
     switch (level) {
       case 0:
@@ -67,44 +65,46 @@ const RiskAssessmentGrid = () => {
   );
 };
 
-const HoldingsTable = () => (
-  <Card className="col-span-1 lg:col-span-2">
-    <h3 className="text-slate-300 text-lg font-semibold mb-4">Holdings</h3>
-    <div className="overflow-x-auto">
-      <table className="w-full text-left">
-        <thead>
-          <tr className="border-b border-slate-700 text-slate-400 text-sm">
-            <th className="py-2 px-2">Name</th>
-            <th className="py-2 px-2 text-right">Value</th>
-            <th className="py-2 px-2 text-right">Risk</th>
-            <th className="py-2 px-2 text-right">Allocation</th>
-          </tr>
-        </thead>
-        <tbody>
-          {holdingsData.map((holding) => (
-            <tr
-              key={holding.name}
-              className="border-b border-slate-800 text-slate-200"
-            >
-              <td className="py-3 px-2 font-medium">{holding.name}</td>
-              <td className="py-3 px-2 text-right">
-                ${holding.value.toLocaleString()}
-              </td>
-              <td className="py-3 px-2 text-right">
-                {holding.risk.toFixed(2)}
-              </td>
-              <td className="py-3 px-2 text-right">
-                {(holding.allocation * 100).toFixed(1)}%
-              </td>
+const HoldingsTable = () => {
+  // This component can also remain as is for now
+  return (
+    <Card className="col-span-1 lg:col-span-2">
+      <h3 className="text-slate-300 text-lg font-semibold mb-4">Holdings</h3>
+      <div className="overflow-x-auto">
+        <table className="w-full text-left">
+          <thead>
+            <tr className="border-b border-slate-700 text-slate-400 text-sm">
+              <th className="py-2 px-2">Name</th>
+              <th className="py-2 px-2 text-right">Value</th>
+              <th className="py-2 px-2 text-right">Risk</th>
+              <th className="py-2 px-2 text-right">Allocation</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  </Card>
-);
+          </thead>
+          <tbody>
+            {holdingsData.map((holding) => (
+              <tr
+                key={holding.name}
+                className="border-b border-slate-800 text-slate-200"
+              >
+                <td className="py-3 px-2 font-medium">{holding.name}</td>
+                <td className="py-3 px-2 text-right">
+                  ${holding.value.toLocaleString()}
+                </td>
+                <td className="py-3 px-2 text-right">
+                  {holding.risk.toFixed(2)}
+                </td>
+                <td className="py-3 px-2 text-right">
+                  {(holding.allocation * 100).toFixed(1)}%
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </Card>
+  );
+};
 
-// The main DashboardPage component is now refactored
 export const DashboardPage = () => {
   // 1. Call the custom hook to get data, loading, and error states
   const { data: riskData, loading, error, refetch } = useRiskMetrics();
@@ -112,12 +112,11 @@ export const DashboardPage = () => {
   // This function demonstrates how to call a service directly, for example, from a button click
   const handleRefreshPortfolio = async () => {
     try {
-      // NOTE: This is just an example. The response isn't used in the UI yet.
-      // You would typically use this to update state.
       console.log("Refreshing portfolio data...");
+      // In a real app, you might want to show a loading indicator here
       const overview = await portfolioService.getOverview("port_123");
       console.log("Portfolio overview refreshed:", overview);
-      // You could potentially call the hook's refetch function here as well
+      // Call the hook's refetch function to update the risk metrics as well
       refetch();
     } catch (error) {
       console.error("Failed to refresh portfolio:", error);
@@ -128,18 +127,24 @@ export const DashboardPage = () => {
   if (loading) {
     return (
       <div className="flex justify-center items-center h-full">
-        <LoadingSpinner size="lg" />
+        <LoadingSpinner size="lg" text="Loading Risk Metrics..." />
       </div>
     );
-  }
-
-  if (error) {
-    return <ErrorMessage error={error} onRetry={refetch} />;
   }
 
   // 3. If data has loaded, render the component with the fetched data
   return (
     <>
+      {/* Show an error message if the API call failed */}
+      {error && (
+        <div className="mb-6">
+          <ErrorMessage
+            error={`Risk API Error: ${error}. Displaying fallback data.`}
+            onRetry={refetch}
+          />
+        </div>
+      )}
+
       <div className="lg:hidden">
         {/* This data would come from a different hook, e.g., usePortfolioOverview */}
         <MetricCard title="Total Value" value="$52,800.75" change={-0.004} />
@@ -157,7 +162,24 @@ export const DashboardPage = () => {
           value={`$${(riskData?.valueAtRisk || 0).toLocaleString()}`}
           subValue="95% Confidence"
         />
+        {/* Add CVaR metric if available */}
+        {riskData?.cvar && (
+          <MetricCard
+            title="Expected Shortfall"
+            value={`$${(Math.abs(riskData.cvar.cvar_estimate) || 0).toLocaleString()}`}
+            subValue={`${(riskData.cvar.confidence_level * 100).toFixed(0)}% CVaR`}
+          />
+        )}
+        {/* Add Stress Test metric if available */}
+        {riskData?.stressTest && (
+          <MetricCard
+            title="Stress Test Loss"
+            value={`-$${(Math.abs(riskData.stressTest.scenario_results[0].portfolio_loss) || 0).toLocaleString()}`}
+            subValue="2008 Crash Scenario"
+          />
+        )}
 
+        {/* The rest of the components can use mock data for now */}
         <ChartCard title="Risk Level" className="md:col-span-2">
           <ResponsiveContainer width="100%" height="100%">
             <LineChart
