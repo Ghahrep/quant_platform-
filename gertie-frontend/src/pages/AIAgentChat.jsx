@@ -8,6 +8,7 @@ export const AIAgentChat = ({ isChatOpen, setChatOpen }) => {
   const { messages, loading, sendMessage, getAISystemStatus } = useAIChat();
   const [input, setInput] = useState("");
   const [aiStatus, setAiStatus] = useState("unknown");
+  const [conversationId, setConversationId] = useState(null);
   const chatEndRef = useRef(null);
 
   useEffect(() => {
@@ -15,21 +16,26 @@ export const AIAgentChat = ({ isChatOpen, setChatOpen }) => {
   }, [messages]);
 
   // Check AI system status when the chat window is opened
-  useEffect(() => {
+  /*useEffect(() => {
     if (isChatOpen) {
       getAISystemStatus().then((status) => {
         setAiStatus(status.status || "offline");
       });
     }
   }, [isChatOpen, getAISystemStatus]);
+*/
+  useEffect(() => {
+    // Generate a unique ID for the conversation session when the component mounts
+    setConversationId(crypto.randomUUID());
+  }, []); // The empty array ensures this effect runs only once
 
   // 3. Update the handleSend function to use the sendMessage function from the hook
   const handleSend = async (e) => {
     e.preventDefault();
     if (!input.trim() || loading) return;
 
-    // This now calls the hook, which handles the API call and state updates
-    await sendMessage(input);
+    // Pass the conversationId along with the user's input
+    await sendMessage(input, conversationId); // MODIFIED
     setInput("");
   };
 

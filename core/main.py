@@ -4,7 +4,7 @@ Main application file with complete API endpoint structure
 Enhanced with robust WebSocket connection management
 """
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Depends, HTTPException, BackgroundTasks, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, validator
@@ -20,7 +20,7 @@ import time
 import logging
 from websockets.exceptions import ConnectionClosed
 from auth.endpoints import auth_router
-from auth.endpoints import get_current_user
+from auth.endpoints import get_current_active_user
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -32,8 +32,12 @@ from analysis.risk import calculate_cvar, fit_garch_forecast
 from analysis.regime import detect_hmm_regimes
 from analysis.fractal import generate_fbm_path
 
+# import database functions
+from models.user import User # The Pydantic model for your use
+
 #import Portfolio functions
 from portfolio.endpoints import portfolio_router
+from models.portfolio import get_user_portfolio
 
 # AI System Integration
 from ai.orchestrator import FinancialOrchestrator
@@ -59,6 +63,7 @@ app.add_middleware(
 
 app.include_router(auth_router)
 app.include_router(portfolio_router)
+chat_history_cache: Dict[str, List[Dict[str, Any]]] = {}
 
 # ================================
 # ROBUST WEBSOCKET CONNECTION MANAGER
@@ -231,6 +236,10 @@ class FbmSimulationRequest(BaseModel):
 class FbmSimulationResponse(BaseResponse):
     data: Dict[str, Any]
 
+class ChatRequest(BaseModel):
+    query: str
+    conversation_id: Optional[str] = None
+
 # ================================
 # UTILITY FUNCTIONS
 # ================================
@@ -368,13 +377,66 @@ async def run_fbm_simulation(request: FbmSimulationRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+def is_portfolio_query(query: str) -> bool:
+    """Simple keyword-based intent detection for portfolio queries."""
+    keywords = [
+        "my portfolio", "my holdings", "my positions", "what is my", 
+        "in my account", "my largest", "my smallest", "how many shares"
+    ]
+    query_lower = query.lower()
+    return any(keyword in query_lower for keyword in keywords)
+
+
 @app.post("/api/v1/ai/orchestrator/query")
-async def ai_orchestrator_query(request: dict):
-    """Route queries through the AI orchestrator system"""
-    query = request.get("query", "")
-    context = request.get("context", {})
+async def ai_orchestrator_query(
+    request: ChatRequest,
+    # We only need the current_user dependency, no 'db' session is required.
+    current_user: User = Depends(get_current_active_user)
+):
+    query = request.query
+    conversation_id = request.conversation_id
+    
+    portfolio_context_str = None
+    if is_portfolio_query(query):
+        print("📈 PORTFOLIO INTENT DETECTED. Fetching portfolio...")
+        
+        # Call your existing CRUD function directly, passing the user's email.
+        portfolio_positions = get_user_portfolio(current_user.email)
+        
+        if portfolio_positions:
+            # Convert list of Pydantic models to a list of dictionaries
+            # Note: Your model might use .dict() or .model_dump() depending on Pydantic version
+            try:
+                positions_list = [pos.model_dump() for pos in portfolio_positions]
+            except AttributeError:
+                positions_list = [pos.dict() for pos in portfolio_positions]
+
+            # Convert the list of dictionaries to a JSON string for the AI
+            portfolio_context_str = json.dumps(positions_list, default=str)
+            print(f"📊 PORTFOLIO FETCHED. Size: {len(portfolio_context_str)} bytes.")
+        else:
+            print("📭 No portfolio found for this user.")
+
+    # This logic for state management remains the same
+    history = chat_history_cache.get(conversation_id, [])
+    
+    context = {
+        "chat_history": history,
+        "portfolio_context": portfolio_context_str 
+    }
+
+    print(f"✅ BACKEND RECEIVED: query='{query}', conversation_id='{conversation_id}'")
     response = await ai_orchestrator.process_query(query, context)
-    return { "success": True, "ai_response": response, "metadata": create_metadata() }
+    ai_message = response.get("message", "Response processed.")
+
+    if conversation_id:
+        current_history = chat_history_cache.get(conversation_id, [])
+        current_history.append({"role": "user", "content": query})
+        current_history.append({"role": "assistant", "content": ai_message})
+        chat_history_cache[conversation_id] = current_history
+        print(f"💾 CACHE UPDATED for conversation {conversation_id}. History now has {len(current_history)} messages.")
+
+    return { "message": ai_message }
 
 @app.get("/api/v1/ai/system/status")
 async def get_ai_system_status():

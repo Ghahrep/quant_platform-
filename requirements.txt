@@ -28,6 +28,7 @@ yfinance           # Yahoo Finance API
 langchain          # LLM framework
 langchain-community # Community integrations
 scikit-learn       # Machine learning utilities
+anthropic 
 
 # Development & Testing
 httpx              # HTTP client for testing (FastAPI TestClient)
@@ -42,3 +43,4 @@ python-dotenv      # Environment variables
 # sqlalchemy       # Database ORM
 # psycopg2-binary  # PostgreSQL adapter
 # alembic          # Database migrations
+

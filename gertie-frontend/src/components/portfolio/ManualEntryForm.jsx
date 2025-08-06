@@ -1,168 +1,72 @@
-// Clear all positions from session with confirmation
-const handleClearAll = () => {
-  if (
-    window.confirm(
-      `Remove all ${sessionPositions.length} positions from the list?`
-    )
-  ) {
-    setSessionPositions([]);
-    setSaveStatus(null);
-    setSaveMessage("");
-  }
-}; // ManualEntryForm.jsx - Basic form structure for manual portfolio entry
 import React, { useState } from "react";
-import {
-  Plus,
-  AlertCircle,
-  X,
-  Trash2,
-  CheckCircle,
-  Loader2,
-} from "lucide-react";
+import { Plus, Trash2, AlertCircle, CheckCircle } from "lucide-react";
+import { useAuth } from "../../contexts/AuthContext";
 
 const ManualEntryForm = () => {
-  // Form state for current position being entered
+  const { token } = useAuth();
+  const [positions, setPositions] = useState([]);
   const [formData, setFormData] = useState({
     symbol: "",
     quantity: "",
-    unitCost: "",
-    transactionDate: "",
+    unit_cost: "",
+    transaction_date: "",
   });
+  const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
+  const [loading, setLoading] = useState(false);
 
-  // Array to store positions being added in this session
-  const [sessionPositions, setSessionPositions] = useState([]);
-
-  // Form validation errors
-  const [errors, setErrors] = useState({});
-
-  // Loading state for save operation
-  const [isSaving, setIsSaving] = useState(false);
-  const [saveStatus, setSaveStatus] = useState(null); // 'success', 'error', null
-  const [saveMessage, setSaveMessage] = useState("");
-
-  // Handle input changes
   const handleInputChange = (e) => {
-    const { name, value } = e.target;
-    setFormData((prev) => ({
-      ...prev,
-      [name]: value,
-    }));
-
-    // Clear error when user starts typing
-    if (errors[name]) {
-      setErrors((prev) => ({
-        ...prev,
-        [name]: "",
-      }));
-    }
+    setFormData({ ...formData, [e.target.name]: e.target.value });
   };
 
-  // Validate form data with duplicate detection
-  const validateForm = () => {
-    const newErrors = {};
-
-    if (!formData.symbol.trim()) {
-      newErrors.symbol = "Ticker symbol is required";
-    } else if (!/^[A-Z]{1,10}$/.test(formData.symbol.toUpperCase())) {
-      newErrors.symbol = "Enter a valid ticker symbol (e.g., AAPL)";
-    } else {
-      // Check for duplicate symbols in session
-      const symbolExists = sessionPositions.some(
-        (pos) => pos.symbol === formData.symbol.toUpperCase()
-      );
-      if (symbolExists) {
-        newErrors.symbol = `${formData.symbol.toUpperCase()} already added. You can add multiple lots of the same stock.`;
-      }
+  const handleAddPosition = () => {
+    setError("");
+    // Basic validation
+    if (!formData.symbol || !formData.quantity || !formData.unit_cost) {
+      setError("Ticker Symbol, Quantity, and Unit Cost are required.");
+      return;
     }
-
-    if (!formData.quantity) {
-      newErrors.quantity = "Quantity is required";
-    } else if (parseInt(formData.quantity) <= 0) {
-      newErrors.quantity = "Quantity must be greater than 0";
-    } else if (parseInt(formData.quantity) > 1000000) {
-      newErrors.quantity = "Quantity seems unusually high. Please verify.";
-    }
-
-    if (!formData.unitCost) {
-      newErrors.unitCost = "Unit cost is required";
-    } else if (parseFloat(formData.unitCost) <= 0) {
-      newErrors.unitCost = "Unit cost must be greater than 0";
-    } else if (parseFloat(formData.unitCost) > 100000) {
-      newErrors.unitCost = "Unit cost seems unusually high. Please verify.";
-    }
-
-    setErrors(newErrors);
-    return Object.keys(newErrors).length === 0;
-  };
-
-  // Handle form submission
-  const handleAddPosition = (e) => {
-    e.preventDefault();
-
-    if (validateForm()) {
-      // Create new position object
-      const newPosition = {
-        id: Date.now(), // Simple ID for removal
-        symbol: formData.symbol.toUpperCase(),
-        quantity: parseInt(formData.quantity),
-        unitCost: parseFloat(formData.unitCost),
-        transactionDate: formData.transactionDate || null,
-      };
-
-      // Add to session positions
-      setSessionPositions((prev) => [...prev, newPosition]);
-
-      console.log("Position added to session:", newPosition);
-
-      // Clear form after successful addition
-      setFormData({
-        symbol: "",
-        quantity: "",
-        unitCost: "",
-        transactionDate: "",
-      });
-    }
-  };
-
-  // Remove position from session with confirmation
-  const handleRemovePosition = (positionId) => {
-    const position = sessionPositions.find((pos) => pos.id === positionId);
     if (
-      position &&
-      window.confirm(
-        `Remove ${position.symbol} (${position.quantity} shares) from the list?`
-      )
+      isNaN(parseFloat(formData.quantity)) ||
+      isNaN(parseFloat(formData.unit_cost))
     ) {
-      setSessionPositions((prev) =>
-        prev.filter((pos) => pos.id !== positionId)
-      );
+      setError("Quantity and Unit Cost must be valid numbers.");
+      return;
     }
+
+    const newPosition = {
+      id: Date.now(), // Temporary ID for list key
+      symbol: formData.symbol.toUpperCase(),
+      quantity: parseFloat(formData.quantity),
+      unit_cost: parseFloat(formData.unit_cost),
+      transaction_date: formData.transaction_date || null,
+    };
+    setPositions([...positions, newPosition]);
+    setFormData({
+      symbol: "",
+      quantity: "",
+      unit_cost: "",
+      transaction_date: "",
+    }); // Clear form
   };
 
-  // Save portfolio to backend
-  const handleSavePortfolio = async () => {
-    if (sessionPositions.length === 0) return;
+  const handleRemovePosition = (id) => {
+    setPositions(positions.filter((p) => p.id !== id));
+  };
 
-    setIsSaving(true);
-    setSaveStatus(null);
-    setSaveMessage("Saving portfolio...");
+  const handleSavePortfolio = async () => {
+    if (positions.length === 0) {
+      setError("Add at least one position to save.");
+      return;
+    }
+    setLoading(true);
+    setError("");
+    setSuccess("");
+
+    // Prepare the data for the backend, removing the temporary 'id' field.
+    const transactions_to_send = positions.map(({ id, ...rest }) => rest);
 
     try {
-      // Get auth token from localStorage
-      const token = localStorage.getItem("token");
-      if (!token) {
-        throw new Error("Authentication required. Please log in.");
-      }
-
-      // Transform session positions to backend format
-      const transactions = sessionPositions.map((position) => ({
-        symbol: position.symbol,
-        quantity: position.quantity,
-        unit_cost: position.unitCost,
-        transaction_date: position.transactionDate,
-      }));
-
-      // Make API call to manual positions endpoint
       const response = await fetch(
         "http://localhost:8000/api/v1/portfolios/positions",
         {
@@ -171,285 +75,184 @@ const ManualEntryForm = () => {
             "Content-Type": "application/json",
             Authorization: `Bearer ${token}`,
           },
-          body: JSON.stringify(transactions),
+          body: JSON.stringify({ transactions: transactions_to_send }),
         }
       );
 
-      const result = await response.json();
-
       if (!response.ok) {
-        throw new Error(result.detail || "Save failed");
+        const errorData = await response.json();
+        throw new Error(errorData.detail || "Failed to save portfolio.");
       }
 
-      // Success
-      setSaveStatus("success");
-      setSaveMessage(result.message || "Portfolio saved successfully!");
-
-      // Clear session after successful save
+      setSuccess("Portfolio saved successfully!");
       setTimeout(() => {
-        setSessionPositions([]);
-        setSaveStatus(null);
-        setSaveMessage("");
+        setPositions([]);
+        setSuccess("");
       }, 3000);
-    } catch (error) {
-      console.error("Save error:", error);
-      setSaveStatus("error");
-      setSaveMessage(
-        error.message || "Failed to save portfolio. Please try again."
-      );
+    } catch (err) {
+      setError(err.message);
     } finally {
-      setIsSaving(false);
+      setLoading(false);
     }
   };
 
   return (
-    <div className="w-full max-w-4xl mx-auto space-y-6">
-      <div className="bg-white rounded-lg border p-6">
-        <h3 className="text-lg font-medium text-gray-900 mb-4">
-          Add Position Manually
-        </h3>
+    <div className="bg-slate-800/50 border border-slate-700 rounded-lg p-8 w-full max-w-4xl mx-auto">
+      <h3 className="text-lg font-semibold text-white mb-6">
+        Add Positions Manually
+      </h3>
 
-        <form onSubmit={handleAddPosition} className="space-y-4">
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-            {/* Ticker Symbol Input */}
-            <div>
-              <label
-                htmlFor="symbol"
-                className="block text-sm font-medium text-gray-700 mb-1"
-              >
-                Ticker Symbol *
-              </label>
-              <input
-                type="text"
-                id="symbol"
-                name="symbol"
-                value={formData.symbol}
-                onChange={handleInputChange}
-                placeholder="e.g., AAPL"
-                className={`w-full px-3 py-2 border rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-gray-900 bg-white placeholder-gray-500 ${
-                  errors.symbol ? "border-red-300 bg-red-50" : "border-gray-300"
-                }`}
-                style={{ textTransform: "uppercase" }}
-              />
-              {errors.symbol && (
-                <div className="flex items-center mt-1 text-sm text-red-600">
-                  <AlertCircle className="w-4 h-4 mr-1" />
-                  {errors.symbol}
-                </div>
-              )}
-            </div>
-
-            {/* Quantity Input */}
-            <div>
-              <label
-                htmlFor="quantity"
-                className="block text-sm font-medium text-gray-700 mb-1"
-              >
-                Quantity *
-              </label>
-              <input
-                type="number"
-                id="quantity"
-                name="quantity"
-                value={formData.quantity}
-                onChange={handleInputChange}
-                placeholder="100"
-                min="1"
-                className={`w-full px-3 py-2 border rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-gray-900 bg-white placeholder-gray-500 ${
-                  errors.quantity
-                    ? "border-red-300 bg-red-50"
-                    : "border-gray-300"
-                }`}
-              />
-              {errors.quantity && (
-                <div className="flex items-center mt-1 text-sm text-red-600">
-                  <AlertCircle className="w-4 h-4 mr-1" />
-                  {errors.quantity}
-                </div>
-              )}
-            </div>
-
-            {/* Unit Cost Input */}
-            <div>
-              <label
-                htmlFor="unitCost"
-                className="block text-sm font-medium text-gray-700 mb-1"
-              >
-                Unit Cost * ($)
-              </label>
-              <input
-                type="number"
-                id="unitCost"
-                name="unitCost"
-                value={formData.unitCost}
-                onChange={handleInputChange}
-                placeholder="150.25"
-                min="0"
-                step="0.01"
-                className={`w-full px-3 py-2 border rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-gray-900 bg-white placeholder-gray-500 ${
-                  errors.unitCost
-                    ? "border-red-300 bg-red-50"
-                    : "border-gray-300"
-                }`}
-              />
-              {errors.unitCost && (
-                <div className="flex items-center mt-1 text-sm text-red-600">
-                  <AlertCircle className="w-4 h-4 mr-1" />
-                  {errors.unitCost}
-                </div>
-              )}
-            </div>
-
-            {/* Transaction Date Input */}
-            <div>
-              <label
-                htmlFor="transactionDate"
-                className="block text-sm font-medium text-gray-700 mb-1"
-              >
-                Transaction Date
-              </label>
-              <input
-                type="date"
-                id="transactionDate"
-                name="transactionDate"
-                value={formData.transactionDate}
-                onChange={handleInputChange}
-                className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-gray-900 bg-white"
-              />
-              <p className="text-xs text-gray-500 mt-1">Optional</p>
-            </div>
-          </div>
-
-          {/* Add Position Button */}
-          <div className="flex justify-end">
-            <button
-              type="submit"
-              className="inline-flex items-center px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-colors"
-            >
-              <Plus className="w-4 h-4 mr-2" />
-              Add Position
-            </button>
-          </div>
-        </form>
+      {/* Form Inputs */}
+      <div className="grid grid-cols-1 md:grid-cols-5 gap-4 items-end">
+        <div className="md:col-span-1">
+          <label className="text-sm font-medium text-slate-300 block mb-2">
+            Ticker Symbol *
+          </label>
+          <input
+            type="text"
+            name="symbol"
+            value={formData.symbol}
+            onChange={handleInputChange}
+            className="w-full p-2 border border-slate-600 rounded-md bg-slate-700 text-white"
+            placeholder="E.G., AAPL"
+          />
+        </div>
+        <div className="md:col-span-1">
+          <label className="text-sm font-medium text-slate-300 block mb-2">
+            Quantity *
+          </label>
+          <input
+            type="number"
+            name="quantity"
+            value={formData.quantity}
+            onChange={handleInputChange}
+            className="w-full p-2 border border-slate-600 rounded-md bg-slate-700 text-white"
+            placeholder="100"
+          />
+        </div>
+        <div className="md:col-span-1">
+          <label className="text-sm font-medium text-slate-300 block mb-2">
+            Unit Cost *
+          </label>
+          <input
+            type="number"
+            name="unit_cost"
+            value={formData.unit_cost}
+            onChange={handleInputChange}
+            className="w-full p-2 border border-slate-600 rounded-md bg-slate-700 text-white"
+            placeholder="150.25"
+          />
+        </div>
+        <div className="md:col-span-1">
+          <label className="text-sm font-medium text-slate-300 block mb-2">
+            Transaction Date
+          </label>
+          <input
+            type="date"
+            name="transaction_date"
+            value={formData.transaction_date}
+            onChange={handleInputChange}
+            className="w-full p-2 border border-slate-600 rounded-md bg-slate-700 text-white"
+          />
+        </div>
+        <div className="md:col-span-1 flex">
+          <button
+            onClick={handleAddPosition}
+            className="w-full py-2 px-4 bg-slate-700 text-white font-semibold rounded-md hover:bg-slate-600 flex items-center justify-center"
+          >
+            <Plus className="w-5 h-5 mr-2" /> Add
+          </button>
+        </div>
       </div>
 
-      {/* Save Status Messages */}
-      {saveMessage && (
-        <div
-          className={`mb-6 flex items-center space-x-2 p-4 rounded-md ${
-            saveStatus === "success"
-              ? "bg-green-50 text-green-800"
-              : saveStatus === "error"
-                ? "bg-red-50 text-red-800"
-                : "bg-blue-50 text-blue-800"
-          }`}
-        >
-          {isSaving ? (
-            <Loader2 className="w-5 h-5 animate-spin" />
-          ) : saveStatus === "success" ? (
-            <CheckCircle className="w-5 h-5" />
-          ) : saveStatus === "error" ? (
-            <AlertCircle className="w-5 h-5" />
-          ) : null}
-          <span className="font-medium">{saveMessage}</span>
-        </div>
-      )}
-
-      {/* Dynamic Positions Table */}
-      {sessionPositions.length > 0 ? (
-        <div className="bg-white rounded-lg border p-6">
-          <div className="flex justify-between items-center mb-4">
-            <h3 className="text-lg font-medium text-gray-900">
-              Positions to Save ({sessionPositions.length})
-            </h3>
-            <button
-              onClick={handleClearAll}
-              className="text-sm text-red-600 hover:text-red-800 font-medium"
-            >
-              Clear All
-            </button>
-          </div>
-
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead className="bg-gray-50">
-                <tr>
-                  <th className="px-4 py-3 text-left text-sm font-medium text-gray-900">
-                    Symbol
-                  </th>
-                  <th className="px-4 py-3 text-left text-sm font-medium text-gray-900">
-                    Quantity
-                  </th>
-                  <th className="px-4 py-3 text-left text-sm font-medium text-gray-900">
-                    Unit Cost
-                  </th>
-                  <th className="px-4 py-3 text-left text-sm font-medium text-gray-900">
-                    Date
-                  </th>
-                  <th className="px-4 py-3 text-left text-sm font-medium text-gray-900">
-                    Total Value
-                  </th>
-                  <th className="px-4 py-3 text-center text-sm font-medium text-gray-900">
-                    Action
-                  </th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-200">
-                {sessionPositions.map((position) => (
-                  <tr key={position.id} className="hover:bg-gray-50">
-                    <td className="px-4 py-3 text-sm font-medium text-gray-900">
-                      {position.symbol}
+      {/* Positions Table */}
+      <div className="mt-8">
+        <h4 className="font-semibold text-white">
+          Positions to Save ({positions.length})
+        </h4>
+        <div className="mt-4 overflow-hidden shadow ring-1 ring-slate-700 sm:rounded-lg">
+          <table className="min-w-full divide-y divide-slate-700">
+            <thead className="bg-slate-800">
+              <tr>
+                <th className="py-3.5 pl-4 pr-3 text-left text-sm font-semibold text-white">
+                  Symbol
+                </th>
+                <th className="py-3.5 px-3 text-left text-sm font-semibold text-white">
+                  Quantity
+                </th>
+                <th className="py-3.5 px-3 text-left text-sm font-semibold text-white">
+                  Unit Cost
+                </th>
+                <th className="py-3.5 px-3 text-left text-sm font-semibold text-white">
+                  Total Value
+                </th>
+                <th className="py-3.5 px-3 text-left text-sm font-semibold text-white">
+                  Action
+                </th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-800 bg-slate-900/50">
+              {positions.length > 0 ? (
+                positions.map((p) => (
+                  <tr key={p.id}>
+                    <td className="py-4 pl-4 pr-3 text-sm font-medium text-white">
+                      {p.symbol}
                     </td>
-                    <td className="px-4 py-3 text-sm text-gray-600">
-                      {position.quantity.toLocaleString()}
+                    <td className="px-3 py-4 text-sm text-slate-300">
+                      {p.quantity}
                     </td>
-                    <td className="px-4 py-3 text-sm text-gray-600">
-                      ${position.unitCost.toFixed(2)}
+                    <td className="px-3 py-4 text-sm text-slate-300">
+                      ${p.unit_cost.toFixed(2)}
                     </td>
-                    <td className="px-4 py-3 text-sm text-gray-600">
-                      {position.transactionDate || "Not specified"}
+                    <td className="px-3 py-4 text-sm text-slate-300">
+                      ${(p.quantity * p.unit_cost).toFixed(2)}
                     </td>
-                    <td className="px-4 py-3 text-sm text-gray-600">
-                      ${(position.quantity * position.unitCost).toFixed(2)}
-                    </td>
-                    <td className="px-4 py-3 text-center">
+                    <td className="px-3 py-4 text-sm">
                       <button
-                        onClick={() => handleRemovePosition(position.id)}
-                        className="text-red-600 hover:text-red-800 p-1 rounded"
-                        title="Remove position"
+                        onClick={() => handleRemovePosition(p.id)}
+                        className="text-red-500 hover:text-red-400"
                       >
                         <Trash2 className="w-4 h-4" />
                       </button>
                     </td>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-
-          {/* Save Portfolio Button */}
-          <div className="mt-6 flex justify-center">
-            <button
-              onClick={handleSavePortfolio}
-              disabled={isSaving || sessionPositions.length === 0}
-              className="px-6 py-3 bg-green-600 text-white font-medium rounded-md hover:bg-green-700 disabled:bg-gray-400 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 transition-colors"
-            >
-              {isSaving ? (
-                <span className="flex items-center space-x-2">
-                  <Loader2 className="w-5 h-5 animate-spin" />
-                  <span>Saving...</span>
-                </span>
+                ))
               ) : (
-                `Save Portfolio (${sessionPositions.length} position${sessionPositions.length !== 1 ? "s" : ""})`
+                <tr>
+                  <td colSpan="5" className="text-center py-8 text-slate-500">
+                    Add a position to get started
+                  </td>
+                </tr>
               )}
-            </button>
-          </div>
+            </tbody>
+          </table>
         </div>
-      ) : (
-        <div className="bg-gray-50 rounded-lg border-2 border-dashed border-gray-300 p-8 text-center">
-          <p className="text-gray-500">Positions you add will appear here</p>
+      </div>
+
+      {/* Save Button & Messages */}
+      <div className="mt-8 flex items-center justify-between">
+        <div className="flex-1">
+          {error && (
+            <div className="flex items-center text-red-400">
+              <AlertCircle className="w-5 h-5 mr-2" />
+              <p>{error}</p>
+            </div>
+          )}
+          {success && (
+            <div className="flex items-center text-green-400">
+              <CheckCircle className="w-5 h-5 mr-2" />
+              <p>{success}</p>
+            </div>
+          )}
         </div>
-      )}
+        <button
+          onClick={handleSavePortfolio}
+          disabled={loading || positions.length === 0}
+          className="py-3 px-6 bg-yellow-500 text-slate-900 font-semibold rounded-md hover:bg-yellow-400 disabled:bg-slate-600 disabled:cursor-not-allowed"
+        >
+          {loading ? "Saving..." : `Save Portfolio (${positions.length})`}
+        </button>
+      </div>
     </div>
   );
 };

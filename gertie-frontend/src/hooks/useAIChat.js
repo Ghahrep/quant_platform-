@@ -1,5 +1,4 @@
 import { useState } from "react";
-import { aiService } from "../services/api";
 
 export const useAIChat = () => {
   const [messages, setMessages] = useState([
@@ -11,37 +10,51 @@ export const useAIChat = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
-  const sendMessage = async (userMessage) => {
+  const sendMessage = async (messageText, conversationId) => {
     try {
       setLoading(true);
       setError(null);
 
-      // Add user message immediately
-      const userMsg = { from: "user", text: userMessage };
+      const userMsg = { from: "user", text: messageText };
       setMessages((prev) => [...prev, userMsg]);
 
-      // Call AI orchestrator
-      const response = await aiService.queryOrchestrator(userMessage, {
-        portfolio_analysis: true,
-        risk_assessment: true,
+      // Using the correct token key you provided
+      const token = localStorage.getItem("gertie_auth_token");
+
+      const response = await fetch("/api/v1/ai/orchestrator/query", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          // This will now send the correct token
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          query: messageText,
+          conversation_id: conversationId,
+        }),
       });
 
-      // Add AI response
+      if (!response.ok) {
+        const errorBody = await response.text();
+        throw new Error(
+          `Server responded with status: ${response.status}. Body: ${errorBody}`
+        );
+      }
+
+      const data = await response.json();
+
       const aiMsg = {
         from: "ai",
         text:
-          response.ai_response?.message ||
-          response.data?.message ||
-          "I'm processing your request...",
+          data.message || "I seem to be at a loss for words. Please try again.",
       };
       setMessages((prev) => [...prev, aiMsg]);
 
-      return response;
+      return data;
     } catch (err) {
       setError(err.message);
       console.error("AI chat error:", err);
 
-      // Fallback response
       const errorMsg = {
         from: "ai",
         text: "I'm currently experiencing some technical difficulties. Please try again in a moment.",
@@ -54,8 +67,18 @@ export const useAIChat = () => {
 
   const getAISystemStatus = async () => {
     try {
-      const response = await aiService.getSystemStatus();
-      return response.system_status || { status: "unknown" };
+      // Note: For this to work, you need a GET /api/v1/ai/system/status endpoint on your backend
+      // as defined in your main.py file.
+      const token = localStorage.getItem("gertie_auth_token");
+
+      const response = await fetch("/api/v1/ai/system/status", {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+      if (!response.ok) return { status: "offline" };
+      const data = await response.json();
+      return data.system_status || { status: "unknown" };
     } catch (err) {
       console.error("AI system status error:", err);
       return { status: "offline" };

@@ -10,6 +10,7 @@ from datetime import datetime
 import logging
 import asyncio
 import numpy as np
+import anthropic
 
 from .agents import (
     FinancialTutorAgent,
@@ -127,6 +128,14 @@ class FinancialOrchestrator:
     async def process_query(self, query: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
         """Main entry point for processing user queries"""
         print(f"[FinancialOrchestrator] Processing query: '{query[:50]}...'")
+
+        # ADD THIS BLOCK to extract and verify the chat history
+        if context and "chat_history" in context:
+            chat_history = context.get("chat_history")
+            print(f"🧠 ORCHESTRATOR RECEIVED HISTORY with {len(chat_history)} messages.")
+        else:
+            chat_history = []
+            print("🧠 ORCHESTRATOR: No history found, starting new conversation.")
         
         classification = self.classify_query(query)
         print(f"[FinancialOrchestrator] Classification: {classification.query_type} "
@@ -136,6 +145,44 @@ class FinancialOrchestrator:
         
         self.query_history.append({"query": query, "response": response})
         return response
+    
+    def _build_llm_prompt(self, query: str, history: List[Dict], portfolio_json: Optional[str]) -> tuple[str, str]:
+        """Assembles a system prompt and a user prompt for Claude."""
+        
+        # 1. The System Persona goes in a dedicated prompt
+        system_prompt = (
+            "You are Gertie, an expert financial AI assistant for a platform where users manage their investment portfolios. "
+            "Your tone is professional, helpful, and concise. Analyze the user's request and use the provided context "
+            "to answer accurately. Do not make up information. If the answer is not in the provided context, say so."
+        )
+
+        # 2. The rest of the context becomes the user prompt
+        user_prompt_parts = []
+
+        # Add Portfolio Context Block (if available)
+        if portfolio_json:
+            user_prompt_parts.append(
+                "--- USER PORTFOLIO DATA ---\n"
+                f"{portfolio_json}\n"
+                "--- END PORTFOLIO DATA ---\n"
+                "Use the data above to answer any questions about the user's holdings."
+            )
+
+        # Add Conversation History Block (if available)
+        if history:
+            history_str = "--- CONVERSATION HISTORY ---\n"
+            for turn in history:
+                role = "Human" if turn.get("role") == "user" else "AI"
+                history_str += f"{role}: {turn.get('content')}\n"
+            history_str += "--- END HISTORY ---"
+            user_prompt_parts.append(history_str)
+
+        # Add the Final User Query
+        user_prompt_parts.append(f"Current Question: {query}")
+        
+        user_prompt = "\n\n".join(user_prompt_parts)
+        
+        return system_prompt, user_prompt
 
     def _get_intelligent_fallback(self, query: str) -> str:
         """
