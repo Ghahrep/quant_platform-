@@ -116,6 +116,19 @@ class FinancialOrchestrator:
 
         complexity = "simple"
 
+        # Rule 1: Check if verbs from multiple categories are present.
+        matched_categories = list(category_scores.keys())
+        
+        # Rule 2: Check for keywords that link actions.
+        connector_keywords = [' and ', ' then ', ' after that ', ' once that is done ']
+        
+        has_connector = any(keyword in query_lower for keyword in connector_keywords)
+
+        if len(matched_categories) > 1 and has_connector:
+            complexity = "multi-step"
+            reasoning += f" | Detected multi-step query with {len(matched_categories)} topics and a connector keyword."
+        # --- END: Complexity Detection Logic ---
+
         return QueryClassificationResult(
             query_type=best_category,
             complexity=complexity,
@@ -126,25 +139,113 @@ class FinancialOrchestrator:
         )
 
     async def process_query(self, query: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
-        """Main entry point for processing user queries"""
-        print(f"[FinancialOrchestrator] Processing query: '{query[:50]}...'")
-
-        # ADD THIS BLOCK to extract and verify the chat history
-        if context and "chat_history" in context:
-            chat_history = context.get("chat_history")
-            print(f"🧠 ORCHESTRATOR RECEIVED HISTORY with {len(chat_history)} messages.")
-        else:
-            chat_history = []
-            print("🧠 ORCHESTRATOR: No history found, starting new conversation.")
+        """Upgraded hybrid approach with sequential workflow routing."""
+        import os
+        print(f"🔑 DEBUG: ANTHROPIC_API_KEY exists: {'ANTHROPIC_API_KEY' in os.environ}")
         
+        context = context or {}
+        portfolio_context = context.get("portfolio_context")
+        
+        # 1. Classify the query
         classification = self.classify_query(query)
-        print(f"[FinancialOrchestrator] Classification: {classification.query_type} "
-              f"(confidence: {classification.confidence:.2f}, complexity: {classification.complexity})")
-
-        response = await self._handle_query(query, classification, context)
+        print(f"[FinancialOrchestrator] Classification: {classification.query_type} (confidence: {classification.confidence:.2f}, complexity: {classification.complexity})")
         
-        self.query_history.append({"query": query, "response": response})
-        return response
+        # 2. --- NEW TOP-LEVEL ROUTER ---
+        # First, check if this is a multi-step query that requires a workflow.
+        if classification.complexity == 'multi-step':
+            return await self._handle_sequential_workflow(query, classification, context)
+        
+        # If not multi-step, proceed with the previous single-step routing logic.
+        else:
+            has_portfolio_context = portfolio_context is not None
+            portfolio_specialist_agents = ["rebalancing", "analysis"]
+            general_specialist_agents = ["educational", "strategy_design"]
+
+            if classification.query_type in portfolio_specialist_agents:
+                print(f"🤖 ROUTING TO PORTFOLIO AGENT: {classification.required_agents[0]}")
+                if has_portfolio_context:
+                    import json
+                    context['portfolio_data'] = json.loads(portfolio_context)
+                return await self._handle_query(query, classification, context)
+
+            elif classification.query_type in general_specialist_agents:
+                print(f"🤖 ROUTING TO GENERAL AGENT: {classification.required_agents[0]}")
+                return await self._handle_query(query, classification, context)
+                
+            else:
+                print(f"🧠 ROUTING TO CLAUDE (Default): Portfolio context={has_portfolio_context}, Query type={classification.query_type}")
+                return await self._process_with_claude(query, context.get("chat_history", []), portfolio_context, classification)
+
+    async def _process_with_claude(self, query: str, chat_history: List[Dict], portfolio_context: Optional[str], classification: QueryClassificationResult) -> Dict[str, Any]:
+        """Process query using Claude with enhanced prompts that include agent expertise"""
+        
+        # Enhanced system prompt that incorporates agent knowledge
+        system_prompt = (
+            "You are Gertie, an expert financial AI assistant with specialized knowledge in multiple areas:\n"
+            "- Portfolio Analysis: Calculate metrics like CVaR, Hurst exponent, GARCH volatility\n"
+            "- Strategy Design: Create mean-reversion and other trading strategies\n" 
+            "- Risk Assessment: Evaluate portfolio risk and provide recommendations\n"
+            "- Financial Education: Explain complex concepts clearly\n\n"
+            "Your tone is professional, helpful, and concise. Analyze the user's request and use the provided context "
+            "to answer accurately. When you have portfolio data, provide specific analysis. Do not make up information."
+        )
+        
+        # Build user prompt with classification insights
+        user_prompt_parts = []
+        
+        # Add query classification context
+        user_prompt_parts.append(f"Query Type: {classification.query_type} (confidence: {classification.confidence:.2f})")
+        if classification.entities:
+            user_prompt_parts.append(f"Key Concepts: {classification.entities}")
+        
+        # Add Portfolio Context Block (if available)
+        if portfolio_context:
+            user_prompt_parts.append(
+                "--- USER PORTFOLIO DATA ---\n"
+                f"{portfolio_context}\n"
+                "--- END PORTFOLIO DATA ---\n"
+                "Use this data to provide specific, personalized analysis."
+            )
+
+        # Add Conversation History Block (if available)
+        if chat_history:
+            history_str = "--- CONVERSATION HISTORY ---\n"
+            for turn in chat_history:
+                role = "Human" if turn.get("role") == "user" else "AI"
+                history_str += f"{role}: {turn.get('content')}\n"
+            history_str += "--- END HISTORY ---"
+            user_prompt_parts.append(history_str)
+
+        # Add the Final User Query
+        user_prompt_parts.append(f"Current Question: {query}")
+        
+        user_prompt = "\n\n".join(user_prompt_parts)
+        
+        print(f"--- System Prompt ---\n{system_prompt}\n----------------------")
+        print(f"--- User Prompt ---\n{user_prompt}\n----------------------")
+        
+        try:
+            client = anthropic.AsyncAnthropic()
+            message = await client.messages.create(
+                model="claude-3-5-sonnet-20241022",
+                max_tokens=1024,
+                system=system_prompt,
+                messages=[{"role": "user", "content": user_prompt}]
+            )
+            
+            ai_message = message.content[0].text
+            print(f"Claude Response: {ai_message}")
+            
+            return {
+                "success": True, 
+                "message": ai_message,
+                "classification": classification.__dict__,
+                "processing_method": "claude_with_context"
+            }
+
+        except Exception as e:
+            print(f"🔥 Claude Call Failed: {e}")
+            return {"success": False, "message": "I'm having trouble connecting to my AI brain. Please try again later."}
     
     def _build_llm_prompt(self, query: str, history: List[Dict], portfolio_json: Optional[str]) -> tuple[str, str]:
         """Assembles a system prompt and a user prompt for Claude."""
@@ -231,7 +332,7 @@ class FinancialOrchestrator:
             else:
                 # Fallback for other defined but not yet implemented routes
                 result = await agent.process_request(query, context)
-                final_message = result.get("message", "Request processed.")
+                final_message = result.get("response", "Request processed.")
 
             return {
                 "success": True,
@@ -244,6 +345,77 @@ class FinancialOrchestrator:
             logger.error(f"Error in agent '{primary_agent_name}': {str(e)}")
             return {"success": False, "message": f"An error occurred with the {primary_agent_name} agent."}
     
+    # In ai/orchestrator.py, replace the existing _handle_sequential_workflow method
+
+    async def _handle_sequential_workflow(self, query: str, classification: QueryClassificationResult,
+                                          context: Dict[str, Any] = None) -> Dict[str, Any]:
+        """
+        Handles complex, multi-step queries by chaining agents together.
+        """
+        print("🚀 KICKING OFF SEQUENTIAL WORKFLOW...")
+        
+        # In a more advanced version, we would dynamically determine the sequence.
+        # For now, we hardcode it for our target query.
+        agent_sequence = ['strategy_architect', 'quantitative_analyst']
+        
+        step_results = []
+        current_context = context.copy()
+        
+        # --- FIX #1: Use targeted queries for each step ---
+        # We can infer the queries for each agent from the user's original request.
+        user_query_parts = re.split(r'\s+and then\s+|\s+and\s+', query, flags=re.IGNORECASE)
+        agent_queries = {
+            'strategy_architect': user_query_parts[0] if len(user_query_parts) > 0 else query,
+            'quantitative_analyst': user_query_parts[1] if len(user_query_parts) > 1 else "perform a risk analysis"
+        }
+
+        for i, agent_name in enumerate(agent_sequence):
+            agent = self.agents.get(agent_name)
+            if not agent:
+                # ... (error handling remains the same)
+                return {"success": False, "message": f"Agent '{agent_name}' not found."}
+
+            current_query = agent_queries.get(agent_name, query)
+            print(f"  -> Workflow Step {i+1}: Calling {agent_name} with query: '{current_query}'")
+            
+            result = await agent.process_request(current_query, current_context)
+            step_response = result.get("response")
+            
+            if not result.get("status") == "completed" or not step_response:
+                # ... (error handling remains the same)
+                return {"success": False, "message": f"Workflow failed at step {i+1}."}
+
+            step_results.append(step_response)
+            
+            # --- FIX #2: More robust context parsing ---
+            if agent_name == 'strategy_architect':
+                mock_portfolio = []
+                for line in step_response.splitlines():
+                    # Find lines that start with "- **" and extract the ticker
+                    if line.strip().startswith('- **'):
+                        try:
+                            # A simple regex to find an all-caps ticker symbol
+                            symbol_match = re.search(r'\*\*([A-Z]{1,5})\*\*', line)
+                            if symbol_match:
+                                symbol = symbol_match.group(1)
+                                mock_portfolio.append({"symbol": symbol, "total_cost_basis": 10000})
+                        except (IndexError, AttributeError):
+                            continue # Ignore lines that don't parse correctly
+                
+                current_context['portfolio_data'] = mock_portfolio
+                print(f"  -> Context Updated: Passed mock portfolio {mock_portfolio} to next step.")
+
+        # --- Response Synthesis ---
+        final_message = "\n\n---\n\n".join(step_results)
+        print("✅ WORKFLOW COMPLETED. Synthesizing final response.")
+
+        return {
+            "success": True,
+            "message": final_message,
+            "agent_used": "Sequential Workflow",
+            "classification": classification.__dict__,
+        }
+
     async def get_system_status(self) -> Dict[str, Any]:
         """Get status of all agents and system health"""
         return {

@@ -112,7 +112,7 @@ if __name__ == "__main__":
     
     # Fetch sample data
     data = yf.download("SPY", start="2018-01-01", end="2023-12-31")
-    prices = data['Adj Close']
+    prices = data['Close']
     returns = prices.pct_change().dropna()
     
     # 1. HMM Regime Detection
@@ -147,7 +147,7 @@ if __name__ == "__main__":
     
     # Plot 1: Price
     ax1.plot(prices.index, prices, label='SPY Price')
-    ax1.set_title('SPY Adjusted Close Price')
+    ax1.set_title('SPY Close Price')
     ax1.grid(True, alpha=0.3)
     
     # Plot 2: HMM Regimes

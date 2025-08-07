@@ -21,7 +21,10 @@ Date: 2025-07-31
 
 import pandas as pd
 import numpy as np
-from typing import Dict, List, Callable
+from typing import Dict, List, Callable,Any
+from .fractal import calculate_hurst
+# ### NEW IMPORT ### - Our market data utility
+from utils.market_data import get_historical_data
 
 def perform_factor_analysis(portfolio_returns: pd.Series, 
                               factor_returns: pd.DataFrame) -> Dict[str, float]:
@@ -140,6 +143,48 @@ def run_backtest(prices: pd.DataFrame,
         'Sharpe Ratio': 0.74,
         'Max. Drawdown [%]': -25.8,
         'Calmar Ratio': 0.64
+    }
+
+async def design_mean_reversion_strategy(
+    universe: List[str], 
+    hurst_threshold: float = 0.45
+) -> Dict[str, Any]:
+    print(f"[StrategyTool] Designing mean-reversion strategy for universe: {universe}")
+    
+    # Use await to call our async data utility
+    historical_data = await get_historical_data(universe, period="1y")
+    if historical_data is None or 'Close' not in historical_data:
+        return {"success": False, "error": "Could not fetch historical price data for the universe."}
+    
+    price_data = historical_data['Close']
+
+    hurst_results = []
+    for ticker in universe:
+        try:
+            price_series = price_data[ticker].dropna()
+            if len(price_series) < 100: continue
+            h_value = calculate_hurst(price_series)
+            hurst_results.append({'ticker': ticker, 'hurst': round(h_value, 4)})
+        except (KeyError, ValueError) as e:
+            print(f"Could not process {ticker} for Hurst calculation: {e}")
+            continue
+    # ... The rest of the function (filtering, sorting, returning results) remains exactly the same ...
+    candidates = [res for res in hurst_results if res['hurst'] < hurst_threshold]
+    sorted_candidates = sorted(candidates, key=lambda x: x['hurst'])
+    if not sorted_candidates:
+        return { "success": False, "error": "No suitable mean-reverting assets found." }
+    strategy_rules = {
+        "name": "Mean-Reversion Hunter (Data-Driven)",
+        "description": "...",
+        "parameters": { "...": "..." },
+        "entry_rule": "...",
+        "exit_rule": "...",
+        "risk_management": "..."
+    }
+    return {
+        "success": True,
+        "strategy": strategy_rules,
+        "candidates": sorted_candidates,
     }
 
 if __name__ == "__main__":

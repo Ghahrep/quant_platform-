@@ -19,6 +19,20 @@ import numpy as np
 import time
 import logging
 from websockets.exceptions import ConnectionClosed
+
+# ADD THESE LINES - Environment Loading
+from dotenv import load_dotenv
+import os
+
+# Load environment variables from .env file
+load_dotenv("core/.env")  # Since your .env is in the core/ directory
+print("🔑 Environment Loading Debug:")
+print(f"✅ .env file exists: {os.path.exists('core/.env')}")
+api_key = os.getenv("ANTHROPIC_API_KEY")
+if api_key:
+    print(f"✅ ANTHROPIC_API_KEY loaded: {api_key[:15]}...")
+else:
+    print("❌ ANTHROPIC_API_KEY not found after loading .env")
 from auth.endpoints import auth_router
 from auth.endpoints import get_current_active_user
 
