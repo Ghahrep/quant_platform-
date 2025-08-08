@@ -1,15 +1,67 @@
 """
 User data models for authentication and user management
-Pydantic models for request/response validation
+SQLAlchemy models for database persistence + Pydantic models for API validation
 """
 
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from datetime import datetime
+from sqlalchemy import Column, String, Boolean, DateTime, Text
+from sqlalchemy.dialects.postgresql import UUID as PG_UUID
+from sqlalchemy.orm import Session, relationship
+from sqlalchemy.sql import func
 from pydantic import BaseModel, EmailStr, Field, validator
 from uuid import UUID, uuid4
+import uuid
+
+# Import database components
+from core.database import Base
 
 # ================================
-# BASE USER MODELS
+# SQLALCHEMY DATABASE MODELS
+# ================================
+
+class User(Base):
+    """SQLAlchemy User model for database storage"""
+    __tablename__ = "users"
+    
+    # Primary key
+    id = Column(String, primary_key=True, default=lambda: str(uuid4()), index=True)
+    
+    # User identification
+    email = Column(String, unique=True, index=True, nullable=False)
+    username = Column(String, unique=True, index=True, nullable=False)
+    hashed_password = Column(String, nullable=False)
+    
+    # User information
+    full_name = Column(String, nullable=True)
+    is_active = Column(Boolean, default=True, nullable=False)
+    
+    # Timestamps
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now(), nullable=True)
+    last_login = Column(DateTime(timezone=True), nullable=True)
+    
+    # Relationships
+    portfolio_positions = relationship("PortfolioPosition", back_populates="user", cascade="all, delete-orphan")
+    
+    def __repr__(self):
+        return f"<User(id={self.id}, email={self.email}, username={self.username})>"
+    
+    def to_dict(self) -> dict:
+        """Convert SQLAlchemy model to dictionary"""
+        return {
+            "id": self.id,
+            "email": self.email,
+            "username": self.username,
+            "full_name": self.full_name,
+            "is_active": self.is_active,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+            "last_login": self.last_login
+        }
+
+# ================================
+# PYDANTIC API MODELS (keep existing)
 # ================================
 
 class UserBase(BaseModel):
@@ -65,56 +117,32 @@ class UserLogin(BaseModel):
     email: EmailStr = Field(..., description="User email")
     password: str = Field(..., description="User password")
 
-# ================================
-# DATABASE MODELS
-# ================================
-
-class User(UserBase):
-    """User model with database fields"""
-    id: UUID = Field(default_factory=uuid4, description="User ID")
-    created_at: datetime = Field(default_factory=datetime.utcnow, description="Creation timestamp")
-    updated_at: Optional[datetime] = Field(None, description="Last update timestamp")
-    last_login: Optional[datetime] = Field(None, description="Last login timestamp")
+class UserResponse(BaseModel):
+    """User response model (no sensitive data)"""
+    id: str
+    email: EmailStr
+    username: str
+    full_name: Optional[str]
+    is_active: bool
+    created_at: datetime
+    updated_at: Optional[datetime]
+    last_login: Optional[datetime]
     
     class Config:
-        """Pydantic configuration"""
         from_attributes = True
         json_encoders = {
-            datetime: lambda v: v.isoformat(),
-            UUID: lambda v: str(v)
+            datetime: lambda v: v.isoformat() if v else None
         }
-
-class UserInDB(User):
-    """User model with hashed password (for database storage)"""
-    hashed_password: str = Field(..., description="Hashed password")
-    
-    def verify_password(self, plain_password: str, pwd_context) -> bool:
-        """Verify password against hashed password"""
-        return pwd_context.verify(plain_password, self.hashed_password)
-    
-    def update_login_time(self):
-        """Update last login timestamp"""
-        self.last_login = datetime.utcnow()
-        self.updated_at = datetime.utcnow()
-
-# ================================
-# RESPONSE MODELS
-# ================================
-
-class UserResponse(User):
-    """User response model (no sensitive data)"""
-    # Inherits all User fields except password-related ones
-    pass
 
 class UserListResponse(BaseModel):
     """Response model for user lists"""
-    users: list[UserResponse]
+    users: List[UserResponse]
     total: int
     page: int = 1
     per_page: int = 10
 
 # ================================
-# TOKEN MODELS
+# TOKEN MODELS (keep existing)
 # ================================
 
 class Token(BaseModel):
@@ -129,13 +157,13 @@ class TokenData(BaseModel):
     email: Optional[str] = None
     user_id: Optional[str] = None
     exp: Optional[datetime] = None
-    
+
 class RefreshToken(BaseModel):
     """Refresh token model"""
     refresh_token: str = Field(..., description="Refresh token")
 
 # ================================
-# AUTHENTICATION RESPONSE MODELS
+# AUTHENTICATION RESPONSE MODELS (keep existing)
 # ================================
 
 class AuthResponse(BaseModel):
@@ -153,10 +181,6 @@ class RegisterResponse(AuthResponse):
     user: UserResponse = Field(..., description="Created user")
     token: Optional[Token] = Field(None, description="Authentication token (optional)")
 
-# ================================
-# ERROR MODELS
-# ================================
-
 class AuthError(BaseModel):
     """Authentication error model"""
     success: bool = False
@@ -165,7 +189,101 @@ class AuthError(BaseModel):
     details: Optional[Dict[str, Any]] = Field(None, description="Error details")
 
 # ================================
-# VALIDATION HELPERS
+# DATABASE CRUD OPERATIONS
+# ================================
+
+def get_user_by_email(db: Session, email: str) -> Optional[User]:
+    """Get user by email from database"""
+    return db.query(User).filter(User.email == email.lower()).first()
+
+def get_user_by_username(db: Session, username: str) -> Optional[User]:
+    """Get user by username from database"""
+    return db.query(User).filter(User.username == username.lower()).first()
+
+def get_user_by_id(db: Session, user_id: str) -> Optional[User]:
+    """Get user by ID from database"""
+    return db.query(User).filter(User.id == user_id).first()
+
+def create_user_in_db(db: Session, user_data: UserCreate, hashed_password: str) -> User:
+    """Create user in database"""
+    db_user = User(
+        email=user_data.email.lower(),
+        username=user_data.username.lower(),
+        full_name=user_data.full_name,
+        hashed_password=hashed_password,
+        is_active=True
+    )
+    
+    db.add(db_user)
+    db.commit()
+    db.refresh(db_user)
+    return db_user
+
+def update_user_in_db(db: Session, user_id: str, update_data: UserUpdate) -> Optional[User]:
+    """Update user in database"""
+    db_user = get_user_by_id(db, user_id)
+    if not db_user:
+        return None
+    
+    update_dict = update_data.dict(exclude_unset=True)
+    for field, value in update_dict.items():
+        if field in ['email', 'username'] and value:
+            value = value.lower()
+        setattr(db_user, field, value)
+    
+    db_user.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(db_user)
+    return db_user
+
+def update_user_login_time(db: Session, user_id: str) -> Optional[User]:
+    """Update user's last login time"""
+    db_user = get_user_by_id(db, user_id)
+    if db_user:
+        db_user.last_login = datetime.utcnow()
+        db_user.updated_at = datetime.utcnow()
+        db.commit()
+        db.refresh(db_user)
+    return db_user
+
+def delete_user_from_db(db: Session, user_id: str) -> bool:
+    """Delete user from database"""
+    db_user = get_user_by_id(db, user_id)
+    if db_user:
+        db.delete(db_user)
+        db.commit()
+        return True
+    return False
+
+def get_all_users(db: Session, skip: int = 0, limit: int = 100) -> List[User]:
+    """Get all users from database with pagination"""
+    return db.query(User).offset(skip).limit(limit).all()
+
+def get_user_count(db: Session) -> int:
+    """Get total user count"""
+    return db.query(User).count()
+
+def user_exists(db: Session, email: str, username: str = None) -> bool:
+    """Check if user exists by email or username"""
+    if get_user_by_email(db, email):
+        return True
+    if username and get_user_by_username(db, username):
+        return True
+    return False
+
+def verify_user_password(db: Session, email: str, password: str, pwd_context) -> Optional[User]:
+    """Verify user password and return user if valid"""
+    user = get_user_by_email(db, email)
+    if not user:
+        return None
+    
+    if not pwd_context.verify(password, user.hashed_password):
+        return None
+    
+    return user
+
+# ================================
+# HELPER FUNCTIONS
 # ================================
 
 def validate_user_data(user_data: dict) -> dict:
@@ -184,80 +302,49 @@ def validate_user_data(user_data: dict) -> dict:
     
     return user_data
 
-# ================================
-# MOCK DATA FOR TESTING
-# ================================
-
-# In-memory user storage for MVP (replace with database later)
-fake_users_db: Dict[str, UserInDB] = {}
-
-def get_user_by_email(email: str) -> Optional[UserInDB]:
-    """Get user by email from fake database"""
-    return fake_users_db.get(email.lower())
-
-def get_user_by_username(username: str) -> Optional[UserInDB]:
-    """Get user by username from fake database"""
-    for user in fake_users_db.values():
-        if user.username == username.lower():
-            return user
-    return None
-
-def create_user_in_db(user_data: UserInDB) -> UserInDB:
-    """Create user in fake database"""
-    fake_users_db[user_data.email.lower()] = user_data
-    return user_data
-
-def update_user_in_db(email: str, update_data: dict) -> Optional[UserInDB]:
-    """Update user in fake database"""
-    user = get_user_by_email(email)
-    if user:
-        for field, value in update_data.items():
-            if hasattr(user, field) and value is not None:
-                setattr(user, field, value)
-        user.updated_at = datetime.utcnow()
-        return user
-    return None
-
-def delete_user_from_db(email: str) -> bool:
-    """Delete user from fake database"""
-    if email.lower() in fake_users_db:
-        del fake_users_db[email.lower()]
-        return True
-    return False
+def convert_user_to_response(user: User) -> UserResponse:
+    """Convert SQLAlchemy User to Pydantic UserResponse"""
+    return UserResponse(
+        id=user.id,
+        email=user.email,
+        username=user.username,
+        full_name=user.full_name,
+        is_active=user.is_active,
+        created_at=user.created_at,
+        updated_at=user.updated_at,
+        last_login=user.last_login
+    )
 
 # ================================
-# HELPER FUNCTIONS
+# DEVELOPMENT/TESTING HELPERS
 # ================================
 
-def user_exists(email: str, username: str = None) -> bool:
-    """Check if user exists by email or username"""
-    if get_user_by_email(email):
-        return True
-    if username and get_user_by_username(username):
-        return True
-    return False
-
-def get_all_users() -> list[UserInDB]:
-    """Get all users from fake database"""
-    return list(fake_users_db.values())
-
-def get_user_count() -> int:
-    """Get total user count"""
-    return len(fake_users_db)
-
-# Example test user for development
-def create_test_user():
+def create_test_user(db: Session, pwd_context) -> User:
     """Create a test user for development"""
-    from passlib.context import CryptContext
-    
-    pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-    
-    test_user = UserInDB(
+    test_user_data = UserCreate(
         email="test@gertie.ai",
         username="testuser",
         full_name="Test User",
-        hashed_password=pwd_context.hash("TestPassword123"),
-        is_active=True
+        password="TestPassword123",
+        confirm_password="TestPassword123"
     )
     
-    return create_user_in_db(test_user)
+    hashed_password = pwd_context.hash(test_user_data.password)
+    return create_user_in_db(db, test_user_data, hashed_password)
+
+def get_database_users_info(db: Session) -> dict:
+    """Get information about users in database for debugging"""
+    users = get_all_users(db)
+    return {
+        "total_users": len(users),
+        "users": [
+            {
+                "id": user.id,
+                "email": user.email,
+                "username": user.username,
+                "is_active": user.is_active,
+                "created_at": user.created_at.isoformat() if user.created_at else None
+            }
+            for user in users
+        ]
+    }

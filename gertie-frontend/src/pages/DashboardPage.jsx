@@ -1,280 +1,181 @@
-import React from "react";
-import {
-  BarChart,
-  Bar,
-  LineChart,
-  Line,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  ResponsiveContainer,
-  Cell,
-} from "recharts";
-import { Bell } from "lucide-react";
-import {
-  MetricCard,
-  ChartCard,
-  Card,
-  LoadingSpinner,
-  ErrorMessage,
-} from "../components/ui";
-import { useRiskMetrics } from "../hooks/useRiskMetrics";
-import { portfolioService } from "../services/api";
+import React, { useState, useEffect, useCallback } from "react";
+import { AlertCircle, Loader2 } from "lucide-react";
 
-// Mock data is kept as a fallback in case the API fails
-import {
-  riskLevelData,
-  riskAssessmentData,
-  portfolioPerformanceData,
-  alertsData,
-  holdingsData,
-  highAlert,
-} from "../data";
+// --- STEP 1: Import the necessary services and hooks ---
+import { useAuth } from "../contexts/AuthContext";
+import { portfolioService, analysisService } from "../services/api";
 
-const RiskAssessmentGrid = () => {
-  // This component can remain as is if its data is static for now
-  const getColor = (level) => {
-    switch (level) {
-      case 0:
-        return "bg-green-500/50";
-      case 1:
-        return "bg-yellow-500/50";
-      case 2:
-        return "bg-orange-500/50";
-      case 3:
-        return "bg-red-500/50";
-      default:
-        return "bg-slate-700";
-    }
-  };
-  return (
-    <Card>
-      <h3 className="text-slate-300 text-lg font-semibold mb-4">
-        Risk Assessment
-      </h3>
-      <div className="grid grid-cols-10 gap-1.5">
-        {riskAssessmentData.map((item) => (
-          <div
-            key={item.id}
-            className={`h-4 rounded ${getColor(item.level)}`}
-          ></div>
-        ))}
+// --- UI Components (self-contained for this example) ---
+// In your app, you would import these from your actual component library.
+const Card = ({ children, className = "" }) => (
+  <div className={`bg-slate-800 p-6 rounded-xl shadow-lg ${className}`}>
+    {children}
+  </div>
+);
+const MetricCard = ({ title, value, subValue }) => (
+  <Card>
+    <h3 className="text-slate-400 text-sm font-medium">{title}</h3>
+    <p className="text-3xl font-bold mt-2 text-white">{value}</p>
+    <p className="text-sm text-slate-500 mt-1">{subValue}</p>
+  </Card>
+);
+const HoldingsTable = ({ holdings }) => (
+  <Card className="col-span-1 lg:col-span-2">
+    <h3 className="text-slate-300 text-lg font-semibold mb-4">Holdings</h3>
+    {holdings && holdings.length > 0 ? (
+      <div className="text-slate-200">{holdings.length} positions loaded.</div>
+    ) : (
+      <div className="flex items-center justify-center h-full text-slate-400">
+        <p>No holdings found. Add positions on the Portfolio page.</p>
       </div>
-    </Card>
-  );
-};
-
-const HoldingsTable = () => {
-  // This component can also remain as is for now
-  return (
-    <Card className="col-span-1 lg:col-span-2">
-      <h3 className="text-slate-300 text-lg font-semibold mb-4">Holdings</h3>
-      <div className="overflow-x-auto">
-        <table className="w-full text-left">
-          <thead>
-            <tr className="border-b border-slate-700 text-slate-400 text-sm">
-              <th className="py-2 px-2">Name</th>
-              <th className="py-2 px-2 text-right">Value</th>
-              <th className="py-2 px-2 text-right">Risk</th>
-              <th className="py-2 px-2 text-right">Allocation</th>
-            </tr>
-          </thead>
-          <tbody>
-            {holdingsData.map((holding) => (
-              <tr
-                key={holding.name}
-                className="border-b border-slate-800 text-slate-200"
-              >
-                <td className="py-3 px-2 font-medium">{holding.name}</td>
-                <td className="py-3 px-2 text-right">
-                  ${holding.value.toLocaleString()}
-                </td>
-                <td className="py-3 px-2 text-right">
-                  {holding.risk.toFixed(2)}
-                </td>
-                <td className="py-3 px-2 text-right">
-                  {(holding.allocation * 100).toFixed(1)}%
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </Card>
-  );
-};
+    )}
+  </Card>
+);
+const PerformanceChart = () => (
+  <Card>
+    <h3 className="text-slate-300 text-lg font-semibold">Performance</h3>
+    <div className="flex items-center justify-center h-full text-slate-400">
+      <p>Performance chart coming soon.</p>
+    </div>
+  </Card>
+);
 
 export const DashboardPage = () => {
-  // 1. Call the custom hook to get data, loading, and error states
-  const { data: riskData, loading, error, refetch } = useRiskMetrics();
+  // --- STEP 2: Get full auth state, including the loading status ---
+  const { isAuthenticated, isLoading: authLoading } = useAuth();
 
-  // This function demonstrates how to call a service directly, for example, from a button click
-  const handleRefreshPortfolio = async () => {
-    try {
-      console.log("Refreshing portfolio data...");
-      // In a real app, you might want to show a loading indicator here
-      const overview = await portfolioService.getOverview("port_123");
-      console.log("Portfolio overview refreshed:", overview);
-      // Call the hook's refetch function to update the risk metrics as well
-      refetch();
-    } catch (error) {
-      console.error("Failed to refresh portfolio:", error);
+  const [data, setData] = useState({ portfolio: [], beta: null, var: null });
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  // --- STEP 3: Create a single, robust data fetching function ---
+  const fetchData = useCallback(async () => {
+    // This is the key: only proceed if authentication is confirmed.
+    if (!isAuthenticated) {
+      setIsLoading(false);
+      setData({ portfolio: [], beta: null, var: null }); // Reset data on logout
+      return;
     }
-  };
 
-  // 2. Handle loading and error states for a better user experience
-  if (loading) {
+    setIsLoading(true);
+    setError(null);
+    try {
+      // First, get the portfolio. The rest of the calls depend on it.
+      const portfolioRes = await portfolioService.getPortfolio();
+      const portfolio = portfolioRes.data;
+
+      // Gracefully handle the case of a new user with an empty portfolio.
+      if (!portfolio || portfolio.length === 0) {
+        setData({ portfolio: [], beta: null, var: null });
+        setIsLoading(false); // Stop loading, there's nothing more to fetch.
+        return;
+      }
+
+      // Only fetch analytics AFTER we confirm a portfolio exists.
+      const [betaRes, cvarRes] = await Promise.all([
+        analysisService.calculateBeta({ portfolio_data: portfolio }),
+        analysisService.calculateCVAR({ portfolio_returns: [] }), // Backend will use context
+      ]);
+
+      setData({
+        portfolio,
+        beta: betaRes.data,
+        var: cvarRes.data,
+      });
+    } catch (err) {
+      const errorMessage =
+        err.response?.data?.detail ||
+        err.message ||
+        "Failed to load dashboard data.";
+      setError(errorMessage);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [isAuthenticated]); // Dependency ensures this function is stable and only recreated when auth state changes
+
+  // --- STEP 4: Trigger the fetch only when authentication is ready ---
+  useEffect(() => {
+    // This effect waits for the initial authentication check to complete.
+    if (!authLoading) {
+      fetchData();
+    }
+  }, [authLoading, fetchData]); // Re-run if the auth state finishes loading or if fetchData changes
+
+  // --- STEP 5: Render UI based on the various loading and data states ---
+  if (authLoading) {
     return (
-      <div className="flex justify-center items-center h-full">
-        <LoadingSpinner size="lg" text="Loading Risk Metrics..." />
+      <div className="flex justify-center items-center h-full p-8">
+        <Loader2 className="w-8 h-8 animate-spin text-slate-400" />
       </div>
     );
   }
 
-  // 3. If data has loaded, render the component with the fetched data
-  return (
-    <>
-      {/* Show an error message if the API call failed */}
-      {error && (
-        <div className="mb-6">
-          <ErrorMessage
-            error={`Risk API Error: ${error}. Displaying fallback data.`}
-            onRetry={refetch}
-          />
+  if (error) {
+    return (
+      <div className="p-8">
+        <div className="bg-red-900/30 text-red-400 p-4 rounded-lg flex items-center justify-between">
+          <span>Dashboard Error: {error}</span>
+          <button
+            onClick={fetchData}
+            className="px-3 py-1 bg-red-600 text-white rounded hover:bg-red-700"
+          >
+            Retry
+          </button>
         </div>
-      )}
-
-      <div className="lg:hidden">
-        {/* This data would come from a different hook, e.g., usePortfolioOverview */}
-        <MetricCard title="Total Value" value="$52,800.75" change={-0.004} />
       </div>
+    );
+  }
 
+  const totalValue = data.portfolio.reduce(
+    (sum, pos) => sum + (pos.market_value || 0),
+    0
+  );
+  const portfolioBeta = data.beta?.portfolio_beta;
+  const valueAtRisk = data.var?.var_analysis?.var_95?.value;
+
+  return (
+    <div className="p-4 md:p-6 space-y-6">
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-        {/* 4. Replace static mock data with data from our hook */}
+        <MetricCard
+          title="Portfolio Value"
+          value={`$${totalValue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+          subValue={`${data.portfolio.length} positions`}
+        />
         <MetricCard
           title="Overall Risk"
-          value="Moderate"
-          subValue={riskData?.overallRiskScore?.toFixed(1) || "N/A"}
+          value={
+            !portfolioBeta
+              ? "N/A"
+              : portfolioBeta > 1.3
+                ? "High"
+                : portfolioBeta > 0.8
+                  ? "Moderate"
+                  : "Low"
+          }
+          subValue={
+            portfolioBeta
+              ? `Portfolio Beta: ${portfolioBeta.toFixed(2)}`
+              : "N/A"
+          }
         />
         <MetricCard
-          title="Value at Risk"
-          value={`$${(riskData?.valueAtRisk || 0).toLocaleString()}`}
-          subValue="95% Confidence"
+          title="Value at Risk (95%)"
+          value={valueAtRisk ? `${valueAtRisk.toFixed(2)}%` : "N/A"}
+          subValue="1-Day Loss Potential"
         />
-        {/* Add CVaR metric if available */}
-        {riskData?.cvar && (
-          <MetricCard
-            title="Expected Shortfall"
-            value={`$${(Math.abs(riskData.cvar.cvar_estimate) || 0).toLocaleString()}`}
-            subValue={`${(riskData.cvar.confidence_level * 100).toFixed(0)}% CVaR`}
-          />
-        )}
-        {/* Add Stress Test metric if available */}
-        {riskData?.stressTest && (
-          <MetricCard
-            title="Stress Test Loss"
-            value={`-$${(Math.abs(riskData.stressTest.scenario_results[0].portfolio_loss) || 0).toLocaleString()}`}
-            subValue="2008 Crash Scenario"
-          />
-        )}
-
-        {/* The rest of the components can use mock data for now */}
-        <ChartCard title="Risk Level" className="md:col-span-2">
-          <ResponsiveContainer width="100%" height="100%">
-            <LineChart
-              data={riskLevelData}
-              margin={{ top: 5, right: 20, left: -10, bottom: 5 }}
-            >
-              <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
-              <XAxis dataKey="name" stroke="#9ca3af" fontSize={12} />
-              <YAxis stroke="#9ca3af" fontSize={12} />
-              <Tooltip
-                contentStyle={{
-                  backgroundColor: "#1f2937",
-                  border: "1px solid #374151",
-                  borderRadius: "0.5rem",
-                }}
-              />
-              <Line
-                type="monotone"
-                dataKey="level"
-                stroke="#facc15"
-                strokeWidth={2}
-                dot={{ r: 4 }}
-                activeDot={{ r: 6 }}
-              />
-            </LineChart>
-          </ResponsiveContainer>
-        </ChartCard>
-
-        <ChartCard title="Portfolio Performance">
-          <ResponsiveContainer width="100%" height="100%">
-            <BarChart
-              data={portfolioPerformanceData}
-              margin={{ top: 5, right: 20, left: -20, bottom: 5 }}
-            >
-              <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
-              <XAxis dataKey="name" stroke="#9ca3af" fontSize={12} />
-              <YAxis stroke="#9ca3af" fontSize={12} />
-              <Tooltip
-                contentStyle={{
-                  backgroundColor: "#1f2937",
-                  border: "1px solid #374151",
-                  borderRadius: "0.5rem",
-                }}
-              />
-              <Bar dataKey="performance" fill="#3b82f6" />
-            </BarChart>
-          </ResponsiveContainer>
-        </ChartCard>
-
-        <RiskAssessmentGrid />
-
-        <Card className="flex flex-col">
-          <h3 className="text-slate-300 text-lg font-semibold mb-2">Alerts</h3>
-          <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-lg p-3 mb-4">
-            <div className="flex items-start space-x-3">
-              <Bell className="w-5 h-5 text-yellow-400 mt-1" />
-              <div>
-                <h4 className="font-bold text-yellow-400">{highAlert.title}</h4>
-                <p className="text-sm text-slate-300">
-                  {highAlert.description}
-                </p>
-                <p className="text-xs text-slate-400 mt-1">{highAlert.time}</p>
-              </div>
-            </div>
-          </div>
-          <div className="flex-1 h-32">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart
-                data={alertsData}
-                margin={{ top: 5, right: 5, left: -20, bottom: 5 }}
-              >
-                <XAxis dataKey="name" stroke="#9ca3af" fontSize={12} />
-                <YAxis stroke="#9ca3af" fontSize={12} />
-                <Tooltip
-                  contentStyle={{
-                    backgroundColor: "#1f2937",
-                    border: "1px solid #374151",
-                    borderRadius: "0.5rem",
-                  }}
-                />
-                <Bar dataKey="alerts">
-                  {alertsData.map((entry, index) => (
-                    <Cell
-                      key={`cell-${index}`}
-                      fill={entry.alerts > 3 ? "#facc15" : "#3b82f6"}
-                    />
-                  ))}
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        </Card>
-
-        <HoldingsTable />
+        <MetricCard
+          title="Alerts"
+          value={"0 Active"}
+          subValue="Last 24 hours"
+        />
       </div>
-    </>
+
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <HoldingsTable holdings={data.portfolio} />
+        <PerformanceChart />
+      </div>
+    </div>
   );
 };
+
+export default DashboardPage;

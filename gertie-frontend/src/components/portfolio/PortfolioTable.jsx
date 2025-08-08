@@ -1,71 +1,192 @@
+// Temporary debug component - replace your current PortfolioTable temporarily
 import React from "react";
-import { Trash2 } from "lucide-react";
 
-const PortfolioTable = ({ portfolio, onDelete }) => {
-  if (!portfolio || portfolio.length === 0) {
-    return (
-      <div className="text-center py-10 bg-slate-800/50 border border-slate-700 rounded-lg">
-        <p className="text-slate-400">Your portfolio is empty.</p>
-        <p className="text-sm text-slate-500 mt-2">
-          Upload a CSV or add positions manually to get started.
-        </p>
-      </div>
-    );
+const PortfolioDebugTable = ({ portfolio, loading = false, error = null }) => {
+  console.log("=== PORTFOLIO DEBUG ===");
+  console.log("Type of portfolio:", typeof portfolio);
+  console.log("Portfolio value:", portfolio);
+  console.log("Is array?", Array.isArray(portfolio));
+  console.log("Portfolio keys:", portfolio ? Object.keys(portfolio) : "N/A");
+
+  if (portfolio?.positions) {
+    console.log("Positions found:", portfolio.positions);
+    console.log("Positions type:", typeof portfolio.positions);
+    console.log("Positions is array?", Array.isArray(portfolio.positions));
+    console.log("Positions length:", portfolio.positions?.length);
   }
 
+  // Show raw data for debugging
   return (
-    <div className="overflow-hidden shadow ring-1 ring-slate-700 sm:rounded-lg">
-      <table className="min-w-full divide-y divide-slate-700">
-        <thead className="bg-slate-800">
-          <tr>
-            <th className="py-3.5 pl-4 pr-3 text-left text-sm font-semibold text-white">
-              Symbol
-            </th>
-            <th className="py-3.5 px-3 text-left text-sm font-semibold text-white">
-              Total Quantity
-            </th>
-            <th className="py-3.5 px-3 text-left text-sm font-semibold text-white">
-              W. Avg Cost
-            </th>
-            <th className="py-3.5 px-3 text-left text-sm font-semibold text-white">
-              Total Cost Basis
-            </th>
-            <th className="py-3.5 px-3 text-left text-sm font-semibold text-white">
-              Actions
-            </th>
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-slate-800 bg-slate-900/50">
-          {portfolio.map((pos) => (
-            <tr key={pos.symbol}>
-              <td className="py-4 pl-4 pr-3 text-sm font-medium text-white">
-                {pos.symbol}
-              </td>
-              <td className="px-3 py-4 text-sm text-slate-300">
-                {pos.total_quantity}
-              </td>
-              <td className="px-3 py-4 text-sm text-slate-300">
-                ${pos.weighted_average_cost.toFixed(2)}
-              </td>
-              <td className="px-3 py-4 text-sm text-slate-300">
-                ${pos.total_cost_basis.toFixed(2)}
-              </td>
-              <td className="px-3 py-4 text-sm">
-                {/* 1. CONNECT ONCLICK TO THE ONDELETE PROP */}
-                <button
-                  onClick={() => onDelete(pos.symbol)}
-                  className="text-slate-500 hover:text-red-500 transition-colors"
-                  title={`Delete ${pos.symbol}`}
+    <div
+      style={{
+        padding: "20px",
+        backgroundColor: "#1a1a1a",
+        color: "white",
+        fontFamily: "monospace",
+      }}
+    >
+      <h3>Portfolio Debug Information</h3>
+
+      <div style={{ marginBottom: "20px" }}>
+        <h4>Props Received:</h4>
+        <p>
+          <strong>Loading:</strong> {loading?.toString()}
+        </p>
+        <p>
+          <strong>Error:</strong> {error?.toString() || "None"}
+        </p>
+        <p>
+          <strong>Portfolio Type:</strong> {typeof portfolio}
+        </p>
+        <p>
+          <strong>Is Array:</strong> {Array.isArray(portfolio)?.toString()}
+        </p>
+      </div>
+
+      <div style={{ marginBottom: "20px" }}>
+        <h4>Portfolio Data Structure:</h4>
+        <pre
+          style={{
+            backgroundColor: "#2a2a2a",
+            padding: "10px",
+            borderRadius: "5px",
+            fontSize: "12px",
+            maxHeight: "300px",
+            overflow: "auto",
+            whiteSpace: "pre-wrap",
+          }}
+        >
+          {portfolio ? JSON.stringify(portfolio, null, 2) : "No portfolio data"}
+        </pre>
+      </div>
+
+      {portfolio?.positions && (
+        <div style={{ marginBottom: "20px" }}>
+          <h4>Positions Analysis:</h4>
+          <p>
+            <strong>Positions Type:</strong> {typeof portfolio.positions}
+          </p>
+          <p>
+            <strong>Positions Is Array:</strong>{" "}
+            {Array.isArray(portfolio.positions)?.toString()}
+          </p>
+          <p>
+            <strong>Positions Length:</strong>{" "}
+            {portfolio.positions?.length || "No length property"}
+          </p>
+
+          {Array.isArray(portfolio.positions) &&
+            portfolio.positions.length > 0 && (
+              <div>
+                <h5>First Position:</h5>
+                <pre
+                  style={{
+                    backgroundColor: "#2a2a2a",
+                    padding: "10px",
+                    borderRadius: "5px",
+                    fontSize: "12px",
+                  }}
                 >
-                  <Trash2 className="w-4 h-4" />
-                </button>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+                  {JSON.stringify(portfolio.positions[0], null, 2)}
+                </pre>
+              </div>
+            )}
+        </div>
+      )}
+
+      {portfolio?.summary && (
+        <div style={{ marginBottom: "20px" }}>
+          <h4>Summary Information:</h4>
+          <pre
+            style={{
+              backgroundColor: "#2a2a2a",
+              padding: "10px",
+              borderRadius: "5px",
+              fontSize: "12px",
+            }}
+          >
+            {JSON.stringify(portfolio.summary, null, 2)}
+          </pre>
+        </div>
+      )}
+
+      <div
+        style={{
+          backgroundColor: "#333",
+          padding: "15px",
+          borderRadius: "5px",
+        }}
+      >
+        <h4>Quick Test:</h4>
+        <p>
+          Can we safely access positions length?
+          <strong
+            style={{
+              color: portfolio?.positions?.length ? "#4CAF50" : "#f44336",
+            }}
+          >
+            {portfolio?.positions?.length
+              ? `YES (${portfolio.positions.length})`
+              : "NO"}
+          </strong>
+        </p>
+
+        {portfolio?.positions?.length > 0 && (
+          <div>
+            <h5>Sample Portfolio Table:</h5>
+            <table
+              style={{
+                width: "100%",
+                border: "1px solid #555",
+                borderCollapse: "collapse",
+              }}
+            >
+              <thead>
+                <tr style={{ backgroundColor: "#444" }}>
+                  <th style={{ border: "1px solid #555", padding: "8px" }}>
+                    Symbol
+                  </th>
+                  <th style={{ border: "1px solid #555", padding: "8px" }}>
+                    Quantity
+                  </th>
+                  <th style={{ border: "1px solid #555", padding: "8px" }}>
+                    Unit Cost
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {portfolio.positions.slice(0, 3).map((pos, idx) => (
+                  <tr key={idx}>
+                    <td style={{ border: "1px solid #555", padding: "8px" }}>
+                      {pos.symbol || "N/A"}
+                    </td>
+                    <td style={{ border: "1px solid #555", padding: "8px" }}>
+                      {pos.quantity || "N/A"}
+                    </td>
+                    <td style={{ border: "1px solid #555", padding: "8px" }}>
+                      {pos.unit_cost || "N/A"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      <div
+        style={{
+          marginTop: "20px",
+          padding: "10px",
+          backgroundColor: "#0066cc",
+          borderRadius: "5px",
+        }}
+      >
+        <strong>Next Step:</strong> Once we see the exact data structure above,
+        we can fix the PortfolioTable component to handle it properly.
+      </div>
     </div>
   );
 };
 
-export default PortfolioTable;
+export default PortfolioDebugTable;

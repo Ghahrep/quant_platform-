@@ -8,12 +8,12 @@ import { Header } from "./components/layout/Header";
 import { Sidebar } from "./components/layout/Sidebar";
 import { BottomNav } from "./components/layout/BottomNav";
 import { DashboardPage } from "./pages/DashboardPage";
-import { AnalyticsPage } from "./pages/AnalyticsPage";
+import AnalyticsPage from "./pages/AnalyticsPage";
 import { AllocationsPage } from "./pages/AllocationsPage";
 import { AlertsPage } from "./pages/AlertsPage";
 import { AIAgentChat } from "./pages/AIAgentChat";
 import { AuthPage } from "./pages/AuthPage";
-import { PortfolioPage } from "./pages/PortfolioPage";
+import PortfolioPage from "./pages/PortfolioPage";
 
 // This component renders the correct page based on the active view.
 const MainContent = ({ activeView }) => {

@@ -1,442 +1,554 @@
-// src/services/api.js - Updated to match your FastAPI backend
+// src/services/api.js
+import axios from "axios";
+import { getToken, removeToken } from "../utils/tokenStorage";
 
-// API Configuration using your existing Vite env setup
+// API Configuration
 const API_BASE_URL =
-  import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
-const ENABLE_MOCK = import.meta.env.VITE_ENABLE_MOCK_DATA === "true";
+  (typeof process !== "undefined" && process.env?.REACT_APP_API_URL) ||
+  "http://localhost:8000/api/v1";
 
-// API Endpoints matching your FastAPI routes
-export const API_ENDPOINTS = {
-  // Health check
-  HEALTH: "/api/v1/health",
-
-  // Analysis endpoints (matching your FastAPI routes)
-  HURST_EXPONENT: "/api/v1/analysis/fractal/hurst-exponent",
-  FRACTAL_DIMENSION: "/api/v1/analysis/fractal/dimension",
-  GARCH_VOLATILITY: "/api/v1/analysis/volatility/garch",
-  CVAR_ANALYSIS: "/api/v1/analysis/risk/cvar",
-  STRESS_TEST: "/api/v1/analysis/risk/stress-test",
-  REGIME_DETECTION: "/api/v1/analysis/regime/detect",
-  BATCH_ANALYSIS: "/api/v1/analysis/batch/comprehensive",
-
-  // Simulation endpoints
-  FBM_SIMULATION: "/api/v1/simulation/fbm",
-  MONTE_CARLO: "/api/v1/simulation/monte-carlo/portfolio",
-  SCENARIO_ANALYSIS: "/api/v1/simulation/scenario/analysis",
-  BACKTEST: "/api/v1/simulation/backtest/strategy",
-  REALTIME_SIM_START: "/api/v1/simulation/realtime/start",
-  REALTIME_SIM_STATUS: "/api/v1/simulation/realtime/{simulation_id}/status",
-  REALTIME_SIM_STOP: "/api/v1/simulation/realtime/{simulation_id}/stop",
-
-  // Portfolio management
-  CREATE_PORTFOLIO: "/api/v1/portfolio/create",
-  REBALANCE_PORTFOLIO: "/api/v1/portfolio/{portfolio_id}/rebalance",
-  OPTIMIZATION_SUGGESTIONS:
-    "/api/v1/portfolio/{portfolio_id}/optimization/suggestions",
-
-  // Risk management
-  HEDGING_SUGGESTIONS: "/api/v1/risk/hedging/suggestions",
-  CONFIGURE_ALERTS: "/api/v1/risk/alerts/configure",
-
-  // Trading
-  CREATE_ORDERS: "/api/v1/trading/orders/create",
-  ORDER_STATUS: "/api/v1/trading/orders/{order_id}/status",
-
-  // Reporting
-  GENERATE_REPORT: "/api/v1/reports/generate",
-
-  // AI Assistant endpoints (matching your FastAPI routes)
-  AI_ASSISTANT: "/api/v1/ai/assistant",
-  AI_ORCHESTRATOR: "/api/v1/ai/orchestrator/query",
-  AI_EXPLAIN: "/api/v1/ai/assistant/explain",
-  AI_RECOMMEND: "/api/v1/ai/assistant/recommend",
-  AI_INTERPRET: "/api/v1/ai/assistant/interpret",
-  AI_SYSTEM_STATUS: "/api/v1/ai/system/status",
-
-  // Utility endpoints
-  TASK_RESULT: "/api/v1/tasks/{task_id}/result",
-  DOWNLOAD_FILE: "/api/v1/downloads/{file_id}",
+// API Endpoints
+const API_ENDPOINTS = {
+  // Authentication
+  auth: {
+    login: "/auth/login",
+    register: "/auth/register",
+    refresh: "/auth/refresh",
+    profile: "/auth/me",
+  },
+  // Portfolio Management
+  portfolio: {
+    get: "/portfolios/me",
+    uploadCSV: "/portfolios/upload-csv",
+    uploadPositions: "/portfolios/positions",
+    bulkCreate: "/portfolios/bulk-create",
+    create: "/portfolios",
+    update: "/portfolios",
+    delete: "/portfolios",
+  },
+  // Analysis (placeholder for future implementation)
+  analysis: {
+    beta: "/analysis/portfolio/beta",
+    cvar: "/analysis/risk/cvar",
+    allocation: "/analysis/allocation",
+  },
 };
 
-export const WEBSOCKET_ENDPOINTS = {
-  PORTFOLIO_UPDATES: "/api/v1/ws/portfolio/{portfolio_id}/updates",
-  MARKET_REGIME: "/api/v1/ws/market/regime-changes",
-  RISK_ALERTS: "/api/v1/ws/alerts/risk-breaches",
+// WebSocket Endpoints (placeholder for real-time features)
+const WEBSOCKET_ENDPOINTS = {
+  portfolio: {
+    updates: "/ws/portfolio/updates",
+    alerts: "/ws/portfolio/alerts",
+    realtime: "/ws/portfolio/realtime",
+  },
+  market: {
+    prices: "/ws/market/prices",
+    news: "/ws/market/news",
+  },
+  alerts: {
+    notifications: "/ws/alerts/notifications",
+    portfolio_alerts: "/ws/alerts/portfolio",
+    price_alerts: "/ws/alerts/prices",
+  },
+  // Helper function to build full WebSocket URLs
+  buildWSUrl: (endpoint) => {
+    const baseWSUrl =
+      (typeof process !== "undefined" && process.env?.REACT_APP_WS_URL) ||
+      "ws://localhost:8000";
+    return `${baseWSUrl}${endpoint}`;
+  },
 };
 
-// Keep your existing ApiError class
-class ApiError extends Error {
-  constructor(message, status, data) {
-    super(message);
-    this.name = "ApiError";
-    this.status = status;
-    this.data = data;
+// Create axios instance
+const apiClient = axios.create({
+  baseURL: API_BASE_URL,
+  timeout: 30000, // 30 seconds for file uploads
+  headers: {
+    "Content-Type": "application/json",
+  },
+});
+
+// Request interceptor to add authentication token
+apiClient.interceptors.request.use(
+  (config) => {
+    const token = getToken();
+
+    if (token) {
+      config.headers.Authorization = `Bearer ${token}`;
+      console.log("Token attached to request:", token.substring(0, 20) + "...");
+    } else {
+      console.warn("No authentication token found");
+    }
+
+    // Log request details for debugging
+    console.log(`API Request: ${config.method?.toUpperCase()} ${config.url}`, {
+      headers: config.headers,
+      data: config.data instanceof FormData ? "FormData" : config.data,
+    });
+
+    return config;
+  },
+  (error) => {
+    console.error("Request interceptor error:", error);
+    return Promise.reject(error);
   }
-}
+);
 
-// Enhanced API client with better error handling and debugging
-const apiClient = {
-  async request(endpoint, options = {}) {
-    const url = `${API_BASE_URL}${endpoint}`;
-    const config = {
-      headers: {
-        "Content-Type": "application/json",
-        ...options.headers,
-      },
-      ...options,
+// Response interceptor for error handling
+apiClient.interceptors.response.use(
+  (response) => {
+    console.log(
+      `API Response: ${response.status} ${response.config.url}`,
+      response.data
+    );
+    return response;
+  },
+  (error) => {
+    console.error("API Error:", {
+      status: error.response?.status,
+      url: error.config?.url,
+      method: error.config?.method,
+      data: error.response?.data,
+      message: error.message,
+    });
+
+    // Handle authentication errors
+    if (error.response?.status === 401) {
+      console.warn("Authentication failed, removing token");
+      removeToken();
+
+      // Optionally redirect to login
+      if (window.location.pathname !== "/login") {
+        window.location.href = "/login";
+      }
+    }
+
+    // Enhance error object with more details
+    const enhancedError = {
+      ...error,
+      isAPIError: true,
+      status: error.response?.status,
+      serverMessage:
+        error.response?.data?.message || error.response?.data?.detail,
+      validationErrors: error.response?.data?.detail || [],
     };
 
-    // Debug logging
-    if (import.meta.env.VITE_DEBUG_API === "true") {
-      console.log(`API Request: ${options.method || "GET"} ${url}`, config);
-    }
+    return Promise.reject(enhancedError);
+  }
+);
 
+// Authentication Service
+export const authService = {
+  async login(credentials) {
     try {
-      const response = await fetch(url, config);
-
-      // Handle different content types
-      let data;
-      const contentType = response.headers.get("content-type");
-      if (contentType && contentType.includes("application/json")) {
-        data = await response.json();
-      } else {
-        data = await response.text();
-      }
-
-      if (!response.ok) {
-        throw new ApiError(
-          data?.message ||
-            data?.error?.message ||
-            `HTTP ${response.status}: ${response.statusText}`,
-          response.status,
-          data
-        );
-      }
-
-      return data;
-    } catch (error) {
-      if (error instanceof ApiError) {
-        throw error;
-      }
-      console.error(`Network error for ${url}:`, error);
-      throw new ApiError(
-        "Network error - check if backend is running",
-        0,
-        null
+      const response = await apiClient.post(
+        API_ENDPOINTS.auth.login,
+        credentials
       );
+      return response.data;
+    } catch (error) {
+      throw new Error(error.serverMessage || "Login failed");
     }
   },
 
-  get(endpoint, options = {}) {
-    return this.request(endpoint, { method: "GET", ...options });
+  async register(userData) {
+    try {
+      const response = await apiClient.post(
+        API_ENDPOINTS.auth.register,
+        userData
+      );
+      return response.data;
+    } catch (error) {
+      throw new Error(error.serverMessage || "Registration failed");
+    }
   },
 
-  post(endpoint, data, options = {}) {
-    return this.request(endpoint, {
-      method: "POST",
-      body: JSON.stringify(data),
-      ...options,
-    });
-  },
-
-  put(endpoint, data, options = {}) {
-    return this.request(endpoint, {
-      method: "PUT",
-      body: JSON.stringify(data),
-      ...options,
-    });
-  },
-
-  delete(endpoint, options = {}) {
-    return this.request(endpoint, { method: "DELETE", ...options });
+  async getProfile() {
+    try {
+      const response = await apiClient.get(API_ENDPOINTS.auth.profile);
+      return response.data;
+    } catch (error) {
+      throw new Error(error.serverMessage || "Failed to fetch profile");
+    }
   },
 };
 
-// Enhanced service functions matching your FastAPI structure
+// Portfolio Service
 export const portfolioService = {
-  async getOverview(portfolioId = "default") {
-    if (ENABLE_MOCK) {
-      return {
-        success: true,
-        data: {
-          totalValue: 52800.75,
-          oneDayReturn: -0.004,
-          overallReturn: 0.085,
+  async getPortfolio() {
+    try {
+      const response = await apiClient.get(API_ENDPOINTS.portfolio.get);
+
+      // Ensure consistent data structure
+      const portfolioData = response.data;
+
+      // Validate response structure
+      if (!portfolioData || typeof portfolioData !== "object") {
+        throw new Error("Invalid portfolio data received from server");
+      }
+
+      // Normalize portfolio structure
+      const normalizedPortfolio = {
+        last_updated: portfolioData.last_updated || null,
+        positions: Array.isArray(portfolioData.positions)
+          ? portfolioData.positions
+          : [],
+        summary: portfolioData.summary || {
+          total_positions: portfolioData.positions?.length || 0,
+          total_market_value: 0,
+          user_id: portfolioData.user_id || null,
         },
       };
+
+      console.log("Normalized portfolio data:", normalizedPortfolio);
+      return normalizedPortfolio;
+    } catch (error) {
+      console.error("Failed to fetch portfolio:", error);
+      throw new Error(error.serverMessage || "Failed to fetch portfolio data");
     }
-    return apiClient.get(
-      API_ENDPOINTS.OPTIMIZATION_SUGGESTIONS.replace(
-        "{portfolio_id}",
-        portfolioId
-      )
-    );
+  },
+
+  async uploadCSVData(positions) {
+    try {
+      // Validate positions array
+      if (!Array.isArray(positions)) {
+        throw new Error("Invalid positions data. Expected array.");
+      }
+
+      if (positions.length === 0) {
+        throw new Error("No positions to upload.");
+      }
+
+      console.log("Uploading positions as direct array:", positions);
+
+      // FIXED: Backend expects direct array, not wrapped in object
+      const response = await apiClient.post(
+        API_ENDPOINTS.portfolio.uploadCSV,
+        positions,
+        {
+          headers: {
+            "Content-Type": "application/json",
+          },
+          timeout: 60000, // 60 seconds
+        }
+      );
+
+      console.log("CSV upload successful:", response.data);
+
+      // Validate and normalize response
+      const portfolioData = response.data;
+
+      const normalizedPortfolio = {
+        last_updated: portfolioData.last_updated || new Date().toISOString(),
+        positions: Array.isArray(portfolioData.positions)
+          ? portfolioData.positions
+          : [],
+        summary: portfolioData.summary || {
+          total_positions: portfolioData.positions?.length || 0,
+          total_market_value:
+            portfolioData.positions?.reduce(
+              (sum, pos) => sum + (pos.quantity || 0) * (pos.unit_cost || 0),
+              0
+            ) || 0,
+          user_id: portfolioData.user_id || null,
+        },
+      };
+
+      return { data: normalizedPortfolio };
+    } catch (error) {
+      console.error("CSV data upload failed:", error);
+
+      // Create detailed error message for 422 validation errors
+      if (error.status === 422 && error.validationErrors) {
+        const validationDetails = Array.isArray(error.validationErrors)
+          ? error.validationErrors
+              .map((err) => `${err.loc?.join(".") || "Field"}: ${err.msg}`)
+              .join("\n")
+          : error.validationErrors;
+
+        error.message = `Validation Error:\n${validationDetails}`;
+      }
+
+      throw error;
+    }
+  },
+
+  async uploadCSV(formData) {
+    try {
+      // Validate FormData
+      if (!(formData instanceof FormData)) {
+        throw new Error("Invalid file data. Expected FormData object.");
+      }
+
+      // Check if file is present
+      const file = formData.get("file");
+      if (!file) {
+        throw new Error("No file found in upload data.");
+      }
+
+      console.log("Uploading CSV file:", {
+        fileName: file.name,
+        fileSize: file.size,
+        fileType: file.type,
+      });
+
+      // Create request with proper headers for file upload
+      const response = await apiClient.post(
+        API_ENDPOINTS.portfolio.uploadCSV,
+        formData,
+        {
+          headers: {
+            "Content-Type": "multipart/form-data",
+          },
+          // Increase timeout for large files
+          timeout: 60000, // 60 seconds
+        }
+      );
+
+      // Validate and normalize response
+      const portfolioData = response.data;
+
+      if (!portfolioData || typeof portfolioData !== "object") {
+        throw new Error("Invalid response from CSV upload");
+      }
+
+      const normalizedPortfolio = {
+        last_updated: portfolioData.last_updated || new Date().toISOString(),
+        positions: Array.isArray(portfolioData.positions)
+          ? portfolioData.positions
+          : [],
+        summary: portfolioData.summary || {
+          total_positions: portfolioData.positions?.length || 0,
+          total_market_value:
+            portfolioData.positions?.reduce(
+              (sum, pos) => sum + (pos.quantity || 0) * (pos.unit_cost || 0),
+              0
+            ) || 0,
+          user_id: portfolioData.user_id || null,
+        },
+      };
+
+      console.log("CSV upload successful:", normalizedPortfolio);
+      return { data: normalizedPortfolio };
+    } catch (error) {
+      console.error("CSV upload failed:", error);
+
+      // Create detailed error message for 422 validation errors
+      if (error.status === 422 && error.validationErrors) {
+        const validationDetails = Array.isArray(error.validationErrors)
+          ? error.validationErrors
+              .map((err) => `${err.loc?.join(".") || "Field"}: ${err.msg}`)
+              .join("\n")
+          : error.validationErrors;
+
+        error.message = `Validation Error:\n${validationDetails}`;
+      }
+
+      throw error;
+    }
+  },
+
+  async createPosition(positionData) {
+    try {
+      const response = await apiClient.post(
+        API_ENDPOINTS.portfolio.create,
+        positionData
+      );
+      return response.data;
+    } catch (error) {
+      throw new Error(error.serverMessage || "Failed to create position");
+    }
+  },
+
+  async updatePosition(positionId, positionData) {
+    try {
+      const response = await apiClient.put(
+        `${API_ENDPOINTS.portfolio.update}/${positionId}`,
+        positionData
+      );
+      return response.data;
+    } catch (error) {
+      throw new Error(error.serverMessage || "Failed to update position");
+    }
+  },
+
+  async deletePosition(positionId) {
+    try {
+      const response = await apiClient.delete(
+        `${API_ENDPOINTS.portfolio.delete}/${positionId}`
+      );
+      return response.data;
+    } catch (error) {
+      throw new Error(error.serverMessage || "Failed to delete position");
+    }
+  },
+};
+
+// Analysis Service (placeholder for future implementation)
+export const analysisService = {
+  async getPortfolioBeta() {
+    try {
+      const response = await apiClient.get(API_ENDPOINTS.analysis.beta);
+      return response.data;
+    } catch (error) {
+      if (error.status === 404) {
+        console.warn("Beta analysis endpoint not implemented yet");
+        return { beta: null, message: "Analysis feature coming soon" };
+      }
+      throw new Error(error.serverMessage || "Failed to fetch portfolio beta");
+    }
   },
 
   async getRiskMetrics() {
-    if (ENABLE_MOCK) {
-      return {
-        success: true,
-        data: {
-          overallRiskScore: 3.2,
-          valueAtRisk: 25400.0,
-        },
-      };
+    try {
+      const response = await apiClient.get(API_ENDPOINTS.analysis.cvar);
+      return response.data;
+    } catch (error) {
+      if (error.status === 404) {
+        console.warn("Risk analysis endpoint not implemented yet");
+        return { cvar: null, message: "Risk analysis feature coming soon" };
+      }
+      throw new Error(error.serverMessage || "Failed to fetch risk metrics");
     }
-
-    // Calculate CVaR with mock data for now
-    const mockReturns = Array.from(
-      { length: 100 },
-      () => (Math.random() - 0.5) * 0.1
-    );
-    return apiClient.post(API_ENDPOINTS.CVAR_ANALYSIS, {
-      portfolio_returns: mockReturns,
-      confidence_level: 0.95,
-    });
-  },
-
-  async createPortfolio(portfolioData) {
-    if (ENABLE_MOCK) {
-      return {
-        success: true,
-        data: { portfolio_id: "mock_portfolio_123" },
-      };
-    }
-    return apiClient.post(API_ENDPOINTS.CREATE_PORTFOLIO, portfolioData);
-  },
-
-  async rebalancePortfolio(portfolioId, rebalanceData) {
-    if (ENABLE_MOCK) {
-      return {
-        success: true,
-        data: { rebalance_id: "mock_rebalance_123" },
-      };
-    }
-    return apiClient.post(
-      API_ENDPOINTS.REBALANCE_PORTFOLIO.replace("{portfolio_id}", portfolioId),
-      rebalanceData
-    );
   },
 };
 
-export const analyticsService = {
-  async getHurstExponent(data) {
-    if (ENABLE_MOCK) {
-      return {
-        success: true,
-        hurst_exponent: 0.42,
-        interpretation: "mean-reverting",
-        metadata: { computation_time_ms: 245 },
-      };
-    }
-    return apiClient.post(API_ENDPOINTS.HURST_EXPONENT, { data });
-  },
-
-  async getGarchForecast(returns, forecastHorizon = 30) {
-    if (ENABLE_MOCK) {
-      return {
-        success: true,
-        data: {
-          in_sample_volatility: Array.from(
-            { length: 50 },
-            () => 0.015 + Math.random() * 0.01
-          ),
-          forecast_volatility: Array.from(
-            { length: forecastHorizon },
-            () => 0.022 + Math.random() * 0.005
-          ),
-        },
-      };
-    }
-    return apiClient.post(API_ENDPOINTS.GARCH_VOLATILITY, {
-      returns,
-      forecast_horizon: forecastHorizon,
-    });
-  },
-
-  async detectRegimes(marketData, nRegimes = 3) {
-    if (ENABLE_MOCK) {
-      return {
-        success: true,
-        data: {
-          current_regime: "Low Volatility",
-          regimes: ["Low Vol", "Mid Vol", "High Vol"],
-          transition_matrix: [
-            [0.95, 0.04, 0.01],
-            [0.2, 0.75, 0.05],
-            [0.1, 0.3, 0.6],
-          ],
-        },
-      };
-    }
-    return apiClient.post(API_ENDPOINTS.REGIME_DETECTION, {
-      market_data: marketData,
-      n_regimes: nRegimes,
-      covariance_type: "full",
-    });
-  },
-
-  async runFBMSimulation(params = {}) {
-    if (ENABLE_MOCK) {
-      return {
-        success: true,
-        data: {
-          num_paths: 10,
-          simulation_days: 252,
-          summary_statistics: {
-            mean_final_value: 110.5,
-            median_final_value: 108.2,
-            std_final_value: 15.3,
-          },
-          paths: [], // Would contain actual path data
-        },
-      };
-    }
-
-    const defaultParams = {
-      initial_price: 100,
-      hurst: 0.7,
-      days: 252,
-      volatility: 0.2,
-      drift: 0.05,
-      num_paths: 10,
-    };
-
-    return apiClient.post(API_ENDPOINTS.FBM_SIMULATION, {
-      ...defaultParams,
-      ...params,
-    });
-  },
-
-  async runStressTest(portfolioPositions, stressScenarios) {
-    if (ENABLE_MOCK) {
-      return {
-        success: true,
-        data: {
-          scenario_results: [
-            {
-              scenario_name: "market_crash_2008",
-              portfolio_loss: -285000,
-              loss_percentage: -28.5,
-            },
-          ],
-        },
-      };
-    }
-    return apiClient.post(API_ENDPOINTS.STRESS_TEST, {
-      portfolio_positions: portfolioPositions,
-      stress_scenarios: stressScenarios,
-    });
-  },
-};
-
+// AI Service (placeholder for AI chat functionality)
 export const aiService = {
-  async queryOrchestrator(query, context = {}) {
-    if (ENABLE_MOCK) {
-      return {
-        success: true,
-        ai_response: {
-          message: `Mock AI response to: "${query.slice(0, 50)}..."`,
-        },
+  async ask(message, conversationId = null) {
+    try {
+      const payload = {
+        message,
+        conversation_id: conversationId,
       };
+
+      console.log("AI Service: Sending message:", payload);
+
+      // Placeholder endpoint - adjust URL when AI backend is implemented
+      const response = await apiClient.post("/ai/chat", payload);
+      return response;
+    } catch (error) {
+      if (error.status === 404) {
+        console.warn("AI chat endpoint not implemented yet");
+        // Return a mock response for development
+        return {
+          data: {
+            message:
+              "I'm sorry, but the AI service is not yet available. This feature is coming soon!",
+            conversation_id:
+              conversationId || "mock-conversation-" + Date.now(),
+            timestamp: new Date().toISOString(),
+          },
+        };
+      }
+      throw new Error(error.serverMessage || "Failed to send message to AI");
     }
-    return apiClient.post(API_ENDPOINTS.AI_ORCHESTRATOR, { query, context });
   },
 
   async getSystemStatus() {
-    if (ENABLE_MOCK) {
-      return {
-        success: true,
-        system_status: {
-          status: "running",
-          agents: ["portfolio_analyst", "risk_manager"],
-        },
-      };
+    try {
+      const response = await apiClient.get("/ai/status");
+      return response;
+    } catch (error) {
+      if (error.status === 404) {
+        console.warn("AI status endpoint not implemented yet");
+        return {
+          data: {
+            status: "offline",
+            message: "AI service not implemented yet",
+            agents: [],
+          },
+        };
+      }
+      throw new Error(error.serverMessage || "Failed to get AI system status");
     }
-    return apiClient.get(API_ENDPOINTS.AI_SYSTEM_STATUS);
   },
 
-  async explainConcept(concept, detailLevel = "intermediate") {
-    if (ENABLE_MOCK) {
-      return {
-        success: true,
-        data: {
-          explanation: `Mock explanation of ${concept}`,
-          detail_level: detailLevel,
-        },
-      };
+  async getConversationHistory(conversationId) {
+    try {
+      const response = await apiClient.get(
+        `/ai/conversations/${conversationId}`
+      );
+      return response;
+    } catch (error) {
+      if (error.status === 404) {
+        console.warn("AI conversation history endpoint not implemented yet");
+        return {
+          data: {
+            messages: [],
+            conversation_id: conversationId,
+          },
+        };
+      }
+      throw new Error(
+        error.serverMessage || "Failed to get conversation history"
+      );
     }
-    return apiClient.post(API_ENDPOINTS.AI_EXPLAIN, {
-      concept,
-      detail_level: detailLevel,
-      context: "general",
-    });
   },
 };
 
-export const riskService = {
-  async calculateCVaR(portfolioReturns, confidenceLevel = 0.95) {
-    if (ENABLE_MOCK) {
-      return {
-        success: true,
-        data: {
-          cvar_estimate: -0.254,
-          confidence_level: confidenceLevel,
-          computation_time_ms: 145,
-        },
-      };
+// Health check utility
+export const healthService = {
+  async checkAPIHealth() {
+    try {
+      const response = await apiClient.get("/health");
+      return response.data;
+    } catch (error) {
+      throw new Error("API health check failed");
     }
-    return apiClient.post("/api/v1/analysis/risk/cvar", {
-      portfolio_returns: portfolioReturns,
-      confidence_level: confidenceLevel,
-    });
   },
 
-  async runStressTest(portfolioPositions, stressScenarios) {
-    if (ENABLE_MOCK) {
-      return {
-        success: true,
-        data: {
-          scenario_results: [
-            {
-              scenario_name: "market_crash_2008",
-              portfolio_loss: -285000,
-              loss_percentage: -28.5,
-            },
-          ],
-        },
-      };
+  async checkAuthHealth() {
+    try {
+      const response = await apiClient.get("/auth/health");
+      return response.data;
+    } catch (error) {
+      throw new Error("Auth service health check failed");
     }
-    return apiClient.post("/api/v1/analysis/risk/stress-test", {
-      portfolio_positions: portfolioPositions,
-      stress_scenarios: stressScenarios,
-    });
   },
 };
 
-export const utilityService = {
-  async healthCheck() {
-    return apiClient.get(API_ENDPOINTS.HEALTH);
+// WebSocket Service (placeholder for real-time features)
+export const createWebSocketConnection = (url, options = {}) => {
+  console.warn(
+    `WebSocket service not implemented yet. Would connect to: ${url}`,
+    options
+  );
+
+  // Return a mock WebSocket-like object to prevent errors
+  return {
+    readyState: 0, // CONNECTING
+    onopen: null,
+    onmessage: null,
+    onclose: null,
+    onerror: null,
+    send: (data) => {
+      console.warn("Mock WebSocket send:", data);
+    },
+    close: (code = 1000, reason = "Manual close") => {
+      console.warn("Mock WebSocket close:", code, reason);
+      if (this.onclose) {
+        this.onclose({ code, reason });
+      }
+    },
+  };
+};
+
+export const websocketService = {
+  createWebSocketConnection,
+
+  connect(url, options = {}) {
+    console.warn("WebSocket connection not implemented yet");
+    return createWebSocketConnection(url, options);
   },
 
-  async getTaskResult(taskId) {
-    return apiClient.get(
-      API_ENDPOINTS.TASK_RESULT.replace("{task_id}", taskId)
-    );
+  disconnect() {
+    console.warn("WebSocket disconnection not implemented yet");
   },
 };
 
-// WebSocket helper
-export const createWebSocketConnection = (endpoint, portfolioId = null) => {
-  const wsBaseUrl = API_BASE_URL.replace("http", "ws");
-  let wsUrl = `${wsBaseUrl}${endpoint}`;
+// Export the configured axios instance for direct use if needed
+export default apiClient;
 
-  if (portfolioId) {
-    wsUrl = wsUrl.replace("{portfolio_id}", portfolioId);
-  }
-
-  return new WebSocket(wsUrl);
-};
-
-// Export the main API client for direct use if needed
-export { apiClient, ApiError };
+// Named exports for backward compatibility
+export { apiClient, API_ENDPOINTS, API_BASE_URL, WEBSOCKET_ENDPOINTS };

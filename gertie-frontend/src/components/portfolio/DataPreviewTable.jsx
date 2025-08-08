@@ -1,58 +1,50 @@
 import React from "react";
 
-const DataPreviewTable = ({ data }) => {
+const DataPreviewTable = ({ data, maxRows = 5 }) => {
+  // Guard against null or empty data
   if (!data || data.length === 0) {
-    return null;
+    return <p className="text-slate-400 text-center">No data to display.</p>;
   }
 
-  // Get headers from the keys of the first object in the data array
+  // Dynamically get headers from the first data object
   const headers = Object.keys(data[0]);
+  const displayedData = data.slice(0, maxRows);
 
   return (
-    <div className="mt-8 flow-root">
-      <div className="-mx-4 -my-2 overflow-x-auto sm:-mx-6 lg:-mx-8">
-        <div className="inline-block min-w-full py-2 align-middle sm:px-6 lg:px-8">
-          <h3 className="text-lg font-semibold text-white mb-4">
-            Data Preview
-          </h3>
-          <div className="overflow-hidden shadow ring-1 ring-slate-700 sm:rounded-lg">
-            <table className="min-w-full divide-y divide-slate-700">
-              <thead className="bg-slate-800">
-                <tr>
-                  {headers.map((header) => (
-                    <th
-                      key={header}
-                      scope="col"
-                      className="py-3.5 pl-4 pr-3 text-left text-sm font-semibold text-white sm:pl-6"
-                    >
-                      {header}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-800 bg-slate-900/50">
-                {data.slice(0, 5).map(
-                  (
-                    row,
-                    rowIndex // Show first 5 rows
-                  ) => (
-                    <tr key={rowIndex}>
-                      {headers.map((header, cellIndex) => (
-                        <td
-                          key={cellIndex}
-                          className="whitespace-nowrap py-4 pl-4 pr-3 text-sm font-medium text-slate-300 sm:pl-6"
-                        >
-                          {row[header]}
-                        </td>
-                      ))}
-                    </tr>
-                  )
-                )}
-              </tbody>
-            </table>
-          </div>
+    <div className="overflow-x-auto rounded-lg border border-slate-700 bg-slate-800/50">
+      <table className="w-full text-sm text-left text-slate-300">
+        <thead className="text-xs text-slate-400 uppercase bg-slate-700/50">
+          <tr>
+            {headers.map((header) => (
+              <th key={header} scope="col" className="px-6 py-3">
+                {header}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {displayedData.map((row, rowIndex) => (
+            <tr
+              key={rowIndex}
+              className="bg-transparent border-b border-slate-700 hover:bg-slate-700/30"
+            >
+              {headers.map((header) => (
+                <td key={`${rowIndex}-${header}`} className="px-6 py-4">
+                  {/* Handle null/undefined values gracefully */}
+                  {row[header] !== null && row[header] !== undefined
+                    ? String(row[header])
+                    : ""}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {data.length > maxRows && (
+        <div className="p-3 text-center text-xs text-slate-500">
+          ... and {data.length - maxRows} more row(s)
         </div>
-      </div>
+      )}
     </div>
   );
 };

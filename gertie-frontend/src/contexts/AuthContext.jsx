@@ -8,8 +8,9 @@ import {
   getTokenData,
 } from "../utils/tokenStorage";
 
-// Define the base URL for your backend API
-const API_BASE_URL = "http://localhost:8000/api/v1";
+// --- STEP 1: Import the new authService ---
+// We no longer need the hardcoded API_BASE_URL here.
+import { authService } from "../services/api";
 
 const AuthContext = createContext(null);
 
@@ -19,6 +20,7 @@ export const AuthProvider = ({ children }) => {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState(null);
 
+  // This initial token check logic remains the same.
   useEffect(() => {
     const checkStoredToken = () => {
       try {
@@ -40,90 +42,152 @@ export const AuthProvider = ({ children }) => {
     checkStoredToken();
   }, []);
 
+  // --- STEP 2: Fixed the login function ---
   const login = async (email, password) => {
     setError(null);
-    // Note: We don't set isLoading here to avoid a full-page loader on login/register.
-    // The loading state is handled inside the form components.
     try {
-      const response = await fetch(`${API_BASE_URL}/auth/login`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password }),
-      });
+      // FIXED: Create credentials object before passing to authService
+      const credentials = { email, password };
+      console.log("AuthContext: Sending login credentials:", credentials);
 
-      const data = await response.json();
+      // Use the centralized authService with proper credentials object
+      const response = await authService.login(credentials);
 
-      if (!response.ok) {
-        // Use the detailed error message from the backend if available
-        throw new Error(
-          data.detail || "Login failed. Please check your credentials."
+      console.log("AuthContext: Login response received:", response);
+
+      // Handle the response data structure
+      let access_token;
+
+      console.log(
+        "AuthContext: Full response structure:",
+        JSON.stringify(response, null, 2)
+      );
+
+      if (response.token?.access_token) {
+        // Backend returns: { token: { access_token: "..." } }
+        access_token = response.token.access_token;
+      } else if (response.data?.token?.access_token) {
+        // Backend returns: { data: { token: { access_token: "..." } } }
+        access_token = response.data.token.access_token;
+      } else if (response.data?.access_token) {
+        // Backend returns: { data: { access_token: "..." } }
+        access_token = response.data.access_token;
+      } else if (response.access_token) {
+        // Backend returns token directly
+        access_token = response.access_token;
+      } else {
+        console.error(
+          "AuthContext: Could not find access_token in response:",
+          response
         );
+        throw new Error("No access token found in response");
       }
 
-      // The backend returns a token named "access_token"
-      const { access_token } = data;
+      console.log(
+        "AuthContext: Extracted access token:",
+        access_token?.substring(0, 20) + "..."
+      );
+
       setToken(access_token); // Store in localStorage
       const userData = getTokenData(access_token);
       setUser(userData);
       setAuthStateToken(access_token); // Update React state
+
+      console.log("AuthContext: Login successful, user data:", userData);
     } catch (err) {
-      setError(err.message);
-      // Re-throw the error so the form component can catch it and display it
-      throw err;
+      console.error("AuthContext: Login error:", err);
+
+      // Enhanced error handling
+      let errorMessage = "Login failed.";
+
+      if (err.response?.status === 422) {
+        errorMessage = "Invalid email or password format.";
+      } else if (err.response?.status === 401) {
+        errorMessage = "Invalid email or password.";
+      } else if (err.response?.data?.detail) {
+        if (Array.isArray(err.response.data.detail)) {
+          errorMessage = err.response.data.detail
+            .map((e) => e.msg || e)
+            .join(", ");
+        } else {
+          errorMessage = err.response.data.detail;
+        }
+      } else if (err.message) {
+        errorMessage = err.message;
+      }
+
+      setError(errorMessage);
+      throw new Error(errorMessage);
     }
   };
 
+  // --- STEP 3: Refactor the register function ---
   const register = async (userData) => {
     setError(null);
     try {
-      const response = await fetch(`${API_BASE_URL}/auth/register`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        // FINAL FIX: Add confirm_password to the request body
-        body: JSON.stringify({
-          username: userData.username,
-          email: userData.email,
-          password: userData.password,
-          confirm_password: userData.confirmPassword, // Backend expects this snake_case key
-        }),
+      console.log("AuthContext: Sending registration data:", userData);
+
+      // The authService already knows the correct endpoint and body structure
+      const response = await authService.register({
+        username: userData.username,
+        email: userData.email,
+        password: userData.password,
+        confirm_password: userData.confirmPassword,
       });
 
-      const data = await response.json();
+      console.log("AuthContext: Registration response received:", response);
 
-      if (!response.ok) {
-        let errorMessage = "Registration Failed. ";
-        if (
-          data.detail &&
-          typeof data.detail === "object" &&
-          data.detail.message
-        ) {
-          errorMessage +=
-            data.detail.message + ": " + (data.detail.errors || []).join(", ");
-        } else if (typeof data.detail === "string") {
-          errorMessage += data.detail;
-        } else if (Array.isArray(data.detail)) {
-          // Handle Pydantic validation error format
-          const pydanticError = data.detail[0];
-          errorMessage += `${pydanticError.loc.join(".")} - ${pydanticError.msg}`;
-        }
-        throw new Error(errorMessage);
+      // Handle the response data structure
+      let access_token;
+
+      if (response.data?.token?.access_token) {
+        // Backend returns: { token: { access_token: "..." } }
+        access_token = response.data.token.access_token;
+      } else if (response.data?.access_token) {
+        // Backend returns: { access_token: "..." }
+        access_token = response.data.access_token;
+      } else if (response.access_token) {
+        // Backend returns token directly
+        access_token = response.access_token;
+      } else {
+        throw new Error("No access token found in registration response");
       }
-
-      // Correctly handle the token returned directly by the /register endpoint
-      console.log("Registration successful. Token received from backend.");
-      const { access_token } = data.token;
 
       setToken(access_token); // Store in localStorage
       const newUserData = getTokenData(access_token);
       setUser(newUserData);
       setAuthStateToken(access_token); // Update React state
+
+      console.log(
+        "AuthContext: Registration successful, user data:",
+        newUserData
+      );
     } catch (err) {
-      setError(err.message);
-      throw err;
+      console.error("AuthContext: Registration error:", err);
+
+      let errorMessage = "Registration failed.";
+
+      if (err.response?.status === 422) {
+        errorMessage = "Invalid registration data format.";
+      } else if (err.response?.data?.detail) {
+        if (Array.isArray(err.response.data.detail)) {
+          errorMessage = err.response.data.detail
+            .map((e) => e.msg || e)
+            .join(", ");
+        } else {
+          errorMessage = err.response.data.detail;
+        }
+      } else if (err.message) {
+        errorMessage = err.message;
+      }
+
+      setError(errorMessage);
+      throw new Error(errorMessage);
     }
   };
 
   const logout = () => {
+    console.log("AuthContext: Logging out user");
     removeToken();
     setUser(null);
     setAuthStateToken(null);

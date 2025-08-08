@@ -5,6 +5,7 @@ Manages multi-agent conversations using AutoGen framework
 
 from typing import Dict, List, Any, Optional
 import logging
+import os 
 import asyncio
 from datetime import datetime
 
@@ -30,60 +31,106 @@ class AutoGenConversationManager:
         self.config = self._load_autogen_config()
     
     def _load_autogen_config(self) -> Dict[str, Any]:
-        """Load AutoGen configuration"""
-        return {
-            "model": "gpt-4",
-            "temperature": 0.1,
-            "max_tokens": 2000,
-            "timeout": 300  # 5 minutes
-        }
-    
-    async def start_conversation(self, participants: List[str], initial_query: str, 
-                               context: Dict[str, Any] = None) -> Dict[str, Any]:
         """
-        Start a multi-agent conversation using AutoGen
+        Load AutoGen configuration to use the ANTHROPIC_API_KEY from environment variables.
+        """
+        # This is the configuration list format AutoGen expects.
+        # It allows for multiple models, but we will configure one for Claude.
+        config_list = [
+            {
+                "model": "claude-3-5-sonnet-20240620", # The specific Claude model to use
+                "api_key": os.getenv("ANTHROPIC_API_KEY"), # Load the key from your .env file
+                "api_type": "anthropic", # Specify that this is an Anthropic model
+            }
+        ]
+
+        return {
+            "config_list": config_list,
+            "temperature": 0.1,
+            "timeout": 300, # 5 minutes
+        }
+
+    # In ai/conversation_manager.py, replace the start_conversation method
+
+    async def start_conversation(self, participants: List[str], initial_query: str, 
+                                 context: Dict[str, Any] = None) -> Dict[str, Any]:
+        """
+        Starts a multi-agent conversation using AutoGen to solve a complex query.
         """
         if not AUTOGEN_AVAILABLE:
-            logger.warning("AutoGen not available, using placeholder response")
-            return await self._placeholder_conversation(participants, initial_query, context)
+            return {"success": False, "message": "AutoGen library is not installed."}
         
         try:
-            session_id = f"session_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            llm_config = self.config
+
+            user_proxy = autogen.UserProxyAgent(
+                name="User_Proxy",
+                human_input_mode="NEVER",
+                max_consecutive_auto_reply=0,
+                code_execution_config={"work_dir": "autogen_workspace", "use_docker": False}
+            )
+
+            quant = autogen.AssistantAgent(name="QuantitativeAnalyst", llm_config=llm_config, system_message="You are a quantitative analyst...")
+            architect = autogen.AssistantAgent(name="StrategyArchitect", llm_config=llm_config, system_message="You are a strategy architect...")
+            rebalancer = autogen.AssistantAgent(name="StrategyRebalancing", llm_config=llm_config, system_message="You are a rebalancing specialist...")
             
-            # Create AutoGen agents based on participants
-            agents = await self._create_autogen_agents(participants)
-            
-            # Setup group chat
+            planner = autogen.AssistantAgent(
+                name="Planner",
+                llm_config=llm_config,
+                system_message="""You are the Planner. Your job is to review the entire conversation...
+                Your response MUST be structured with three sections: '1. Risk Assessment', '2. New Strategic Allocation', and '3. Actionable Trade Plan'.
+                After presenting the complete plan, you MUST end your message with the single word: TERMINATE"""
+            )
+
             group_chat = autogen.GroupChat(
-                agents=agents,
+                agents=[user_proxy, quant, architect, rebalancer, planner],
                 messages=[],
-                max_round=10
+                max_round=15 
             )
             
-            manager = autogen.GroupChatManager(groupchat=group_chat, llm_config=self.config)
+            # --- THIS IS THE FINAL FIX ---
+            # The termination condition is now much more specific.
+            manager = autogen.GroupChatManager(
+                groupchat=group_chat, 
+                llm_config=llm_config,
+                # The chat only terminates if the SENDER is the Planner AND the message contains TERMINATE.
+                is_termination_msg=lambda x: x.get("name") == "Planner" and "TERMINATE" in x.get("content", "").upper()
+            )
+
+            initial_message = f"""
+            The user has the following complex request: "{initial_query}"
+            Current portfolio context (with live market values):
+            {context.get('portfolio_context', 'No portfolio data provided.')}
+
+            Please work together as a team to formulate a complete, actionable plan, following this exact sequence:
+            1. The QuantitativeAnalyst will first assess the risk of the current portfolio.
+            2. The StrategyArchitect will then propose a new target allocation.
+            3. The StrategyRebalancing agent will calculate the specific trades needed.
+            4. Finally, the Planner will summarize the complete plan and terminate the mission.
+            Begin.
+            """
+
+            await user_proxy.a_initiate_chat(
+                manager,
+                message=initial_message,
+            )
             
-            # Start conversation
-            conversation_result = await self._run_conversation(manager, initial_query, context)
-            
-            # Store session
-            self.active_sessions[session_id] = {
-                "participants": participants,
-                "messages": conversation_result.get("messages", []),
-                "status": "completed",
-                "created_at": datetime.now().isoformat()
-            }
-            
+            final_response = "The AI team has completed their analysis."
+            for msg in reversed(group_chat.messages):
+                # We now look for the message from the "Planner"
+                if msg.get('name') == 'Planner' and msg['content'].strip():
+                    final_response = msg['content'].replace("TERMINATE", "").strip()
+                    break
+
             return {
-                "session_id": session_id,
-                "result": conversation_result,
-                "participants": participants,
-                "message_count": len(conversation_result.get("messages", [])),
-                "status": "success"
+                "success": True,
+                "message": final_response,
+                "full_conversation": group_chat.messages
             }
             
         except Exception as e:
-            logger.error(f"Error in AutoGen conversation: {str(e)}")
-            return await self._placeholder_conversation(participants, initial_query, context)
+            logger.error(f"Error in AutoGen conversation: {e}")
+            return {"success": False, "message": f"An error occurred during the multi-agent conversation: {e}"}
     
     async def _create_autogen_agents(self, participants: List[str]) -> List[Any]:
         """
@@ -128,7 +175,12 @@ class AutoGenConversationManager:
         user_proxy = autogen.UserProxyAgent(
             name="UserProxy",
             human_input_mode="NEVER",
-            code_execution_config={"work_dir": "autogen_workspace"}
+            # --- MODIFIED LINE ---
+            # This tells AutoGen to execute code locally instead of in Docker.
+            code_execution_config={
+                "work_dir": "autogen_workspace",
+                "use_docker": False 
+            }
         )
         agents.append(user_proxy)
         

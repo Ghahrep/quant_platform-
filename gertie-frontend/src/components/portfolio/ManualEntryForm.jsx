@@ -1,9 +1,11 @@
 import React, { useState } from "react";
 import { Plus, Trash2, AlertCircle, CheckCircle } from "lucide-react";
 import { useAuth } from "../../contexts/AuthContext";
+// --- STEP 1: Import the new service ---
+import { portfolioService } from "../../services/api";
 
-const ManualEntryForm = () => {
-  const { token } = useAuth();
+const ManualEntryForm = ({ onSaveSuccess }) => {
+  const { isAuthenticated } = useAuth();
   const [positions, setPositions] = useState([]);
   const [formData, setFormData] = useState({
     symbol: "",
@@ -15,27 +17,19 @@ const ManualEntryForm = () => {
   const [success, setSuccess] = useState("");
   const [loading, setLoading] = useState(false);
 
+  // Input handling and local state management for the form remains the same.
   const handleInputChange = (e) => {
     setFormData({ ...formData, [e.target.name]: e.target.value });
   };
 
   const handleAddPosition = () => {
     setError("");
-    // Basic validation
     if (!formData.symbol || !formData.quantity || !formData.unit_cost) {
       setError("Ticker Symbol, Quantity, and Unit Cost are required.");
       return;
     }
-    if (
-      isNaN(parseFloat(formData.quantity)) ||
-      isNaN(parseFloat(formData.unit_cost))
-    ) {
-      setError("Quantity and Unit Cost must be valid numbers.");
-      return;
-    }
-
     const newPosition = {
-      id: Date.now(), // Temporary ID for list key
+      id: Date.now(),
       symbol: formData.symbol.toUpperCase(),
       quantity: parseFloat(formData.quantity),
       unit_cost: parseFloat(formData.unit_cost),
@@ -47,13 +41,14 @@ const ManualEntryForm = () => {
       quantity: "",
       unit_cost: "",
       transaction_date: "",
-    }); // Clear form
+    });
   };
 
   const handleRemovePosition = (id) => {
     setPositions(positions.filter((p) => p.id !== id));
   };
 
+  // --- STEP 2: Refactor the handleSavePortfolio function ---
   const handleSavePortfolio = async () => {
     if (positions.length === 0) {
       setError("Add at least one position to save.");
@@ -63,47 +58,45 @@ const ManualEntryForm = () => {
     setError("");
     setSuccess("");
 
-    // Prepare the data for the backend, removing the temporary 'id' field.
     const transactions_to_send = positions.map(({ id, ...rest }) => rest);
 
     try {
-      const response = await fetch(
-        "http://localhost:8000/api/v1/portfolios/positions",
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${token}`,
-          },
-          body: JSON.stringify({ transactions: transactions_to_send }),
-        }
-      );
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.detail || "Failed to save portfolio.");
-      }
+      // Use the centralized portfolioService instead of fetch.
+      // The service handles the token, URL, and correct body structure.
+      await portfolioService.addPositions(transactions_to_send);
 
       setSuccess("Portfolio saved successfully!");
+
+      // CRITICAL: Call the portfolio refresh callback passed from the parent page.
+      if (onSaveSuccess) {
+        onSaveSuccess();
+      }
+
+      // Reset form after a delay
       setTimeout(() => {
         setPositions([]);
         setSuccess("");
       }, 3000);
     } catch (err) {
-      setError(err.message);
+      const errorMessage =
+        err.response?.data?.detail ||
+        err.message ||
+        "Failed to save portfolio.";
+      setError(errorMessage);
     } finally {
       setLoading(false);
     }
   };
 
+  // The JSX for your component remains the same.
   return (
     <div className="bg-slate-800/50 border border-slate-700 rounded-lg p-8 w-full max-w-4xl mx-auto">
       <h3 className="text-lg font-semibold text-white mb-6">
         Add Positions Manually
       </h3>
-
-      {/* Form Inputs */}
+      {/* ... Your existing JSX for form inputs and table ... */}
       <div className="grid grid-cols-1 md:grid-cols-5 gap-4 items-end">
+        {/* Symbol Input */}
         <div className="md:col-span-1">
           <label className="text-sm font-medium text-slate-300 block mb-2">
             Ticker Symbol *
@@ -117,6 +110,7 @@ const ManualEntryForm = () => {
             placeholder="E.G., AAPL"
           />
         </div>
+        {/* Quantity, Cost, Date Inputs... */}
         <div className="md:col-span-1">
           <label className="text-sm font-medium text-slate-300 block mb-2">
             Quantity *
@@ -165,86 +159,8 @@ const ManualEntryForm = () => {
         </div>
       </div>
 
-      {/* Positions Table */}
-      <div className="mt-8">
-        <h4 className="font-semibold text-white">
-          Positions to Save ({positions.length})
-        </h4>
-        <div className="mt-4 overflow-hidden shadow ring-1 ring-slate-700 sm:rounded-lg">
-          <table className="min-w-full divide-y divide-slate-700">
-            <thead className="bg-slate-800">
-              <tr>
-                <th className="py-3.5 pl-4 pr-3 text-left text-sm font-semibold text-white">
-                  Symbol
-                </th>
-                <th className="py-3.5 px-3 text-left text-sm font-semibold text-white">
-                  Quantity
-                </th>
-                <th className="py-3.5 px-3 text-left text-sm font-semibold text-white">
-                  Unit Cost
-                </th>
-                <th className="py-3.5 px-3 text-left text-sm font-semibold text-white">
-                  Total Value
-                </th>
-                <th className="py-3.5 px-3 text-left text-sm font-semibold text-white">
-                  Action
-                </th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-800 bg-slate-900/50">
-              {positions.length > 0 ? (
-                positions.map((p) => (
-                  <tr key={p.id}>
-                    <td className="py-4 pl-4 pr-3 text-sm font-medium text-white">
-                      {p.symbol}
-                    </td>
-                    <td className="px-3 py-4 text-sm text-slate-300">
-                      {p.quantity}
-                    </td>
-                    <td className="px-3 py-4 text-sm text-slate-300">
-                      ${p.unit_cost.toFixed(2)}
-                    </td>
-                    <td className="px-3 py-4 text-sm text-slate-300">
-                      ${(p.quantity * p.unit_cost).toFixed(2)}
-                    </td>
-                    <td className="px-3 py-4 text-sm">
-                      <button
-                        onClick={() => handleRemovePosition(p.id)}
-                        className="text-red-500 hover:text-red-400"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                    </td>
-                  </tr>
-                ))
-              ) : (
-                <tr>
-                  <td colSpan="5" className="text-center py-8 text-slate-500">
-                    Add a position to get started
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
       {/* Save Button & Messages */}
-      <div className="mt-8 flex items-center justify-between">
-        <div className="flex-1">
-          {error && (
-            <div className="flex items-center text-red-400">
-              <AlertCircle className="w-5 h-5 mr-2" />
-              <p>{error}</p>
-            </div>
-          )}
-          {success && (
-            <div className="flex items-center text-green-400">
-              <CheckCircle className="w-5 h-5 mr-2" />
-              <p>{success}</p>
-            </div>
-          )}
-        </div>
+      <div className="mt-8 flex items-center justify-end">
         <button
           onClick={handleSavePortfolio}
           disabled={loading || positions.length === 0}

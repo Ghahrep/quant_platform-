@@ -1,50 +1,94 @@
 """
-Authentication API endpoints for user registration, login, and token management
-FastAPI routes for handling authentication operations
+Authentication endpoints with database persistence
+Updated to use SQLAlchemy instead of in-memory storage
 """
 
 from datetime import datetime, timedelta
-from typing import Optional, Dict, Any
-from fastapi import APIRouter, HTTPException, Depends, status, Form
+from typing import Optional, Any
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from pydantic import ValidationError
+from sqlalchemy.orm import Session
+from jose import JWTError, jwt
+from passlib.context import CryptContext
+import os
+import logging
 
-# Import our models and security utilities
+# Import database and models
+from core.database import get_db
 from models.user import (
-    UserCreate, UserLogin, UserResponse, UserInDB, 
-    Token, AuthResponse, LoginResponse, RegisterResponse, AuthError,
-    get_user_by_email, get_user_by_username, create_user_in_db, 
-    user_exists, validate_user_data, update_user_in_db
+    User, UserCreate, UserLogin, UserResponse, UserUpdate,
+    Token, TokenData, LoginResponse, RegisterResponse, AuthError,
+    get_user_by_email, get_user_by_id, get_user_by_username, create_user_in_db, 
+    update_user_login_time, user_exists, verify_user_password,
+    convert_user_to_response, get_database_users_info
 )
-from auth.security import (
-    get_password_hash, verify_password, create_user_tokens,
-    verify_token, extract_token_data, refresh_access_token,
-    validate_password_strength
-)
-from config import settings
 
-# Create router for authentication routes
-auth_router = APIRouter(prefix="/api/v1/auth", tags=["authentication"])
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-# Security scheme for JWT Bearer tokens
+# ================================
+# SECURITY CONFIGURATION
+# ================================
+
+# JWT Configuration
+SECRET_KEY = os.getenv("JWT_SECRET_KEY", "your-secret-key-change-in-production")
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 30
+
+# Password hashing
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+# HTTP Bearer security scheme
 security = HTTPBearer()
+
+# Create router
+router = APIRouter(prefix="/api/v1/auth", tags=["authentication"])
+
+# ================================
+# UTILITY FUNCTIONS
+# ================================
+
+def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
+    """Create JWT access token"""
+    to_encode = data.copy()
+    if expires_delta:
+        expire = datetime.utcnow() + expires_delta
+    else:
+        expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    
+    to_encode.update({"exp": expire})
+    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    return encoded_jwt
+
+def verify_token(token: str) -> Optional[TokenData]:
+    """Verify and decode JWT token"""
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        email: str = payload.get("sub")
+        user_id: str = payload.get("user_id")
+        exp: datetime = datetime.fromtimestamp(payload.get("exp", 0))
+        
+        if email is None or user_id is None:
+            return None
+            
+        token_data = TokenData(email=email, user_id=user_id, exp=exp)
+        return token_data
+    except JWTError as e:
+        logger.error(f"JWT verification failed: {e}")
+        return None
 
 # ================================
 # DEPENDENCY FUNCTIONS
 # ================================
 
-async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> UserInDB:
+async def get_current_user(
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    db: Session = Depends(get_db)
+) -> User:
     """
-    Dependency to get the current authenticated user from JWT token
-    
-    Args:
-        credentials: HTTP Bearer token credentials
-        
-    Returns:
-        Current authenticated user
-        
-    Raises:
-        HTTPException: If token is invalid or user not found
+    Get current authenticated user from JWT token
+    This is the function that was failing before!
     """
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
@@ -55,131 +99,78 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
     try:
         # Extract token from credentials
         token = credentials.credentials
+        logger.info(f"Validating token: {token[:20]}...")
         
-        # Verify and extract token data
-        token_data = extract_token_data(token)
-        if token_data is None or token_data.get("email") is None:
+        # Verify and decode token
+        token_data = verify_token(token)
+        if token_data is None:
+            logger.error("Token verification failed")
             raise credentials_exception
         
-        # Get user from database
-        user = get_user_by_email(token_data["email"])
+        logger.info(f"Token valid for user: {token_data.email}")
+        
+        # Get user from database using the email from token
+        user = get_user_by_email(db, token_data.email)
         if user is None:
+            logger.error(f"User not found in database: {token_data.email}")
             raise credentials_exception
-            
-        # Check if user is active
-        if not user.is_active:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Inactive user"
-            )
         
+        logger.info(f"User found in database: {user.email}")
         return user
         
-    except HTTPException:
-        raise
-    except Exception:
+    except JWTError as e:
+        logger.error(f"JWT error in get_current_user: {e}")
+        raise credentials_exception
+    except Exception as e:
+        logger.error(f"Unexpected error in get_current_user: {e}")
         raise credentials_exception
 
-async def get_current_active_user(current_user: UserInDB = Depends(get_current_user)) -> UserInDB:
-    """
-    Dependency to get current active user (additional check)
-    
-    Args:
-        current_user: Current user from get_current_user dependency
-        
-    Returns:
-        Current active user
-        
-    Raises:
-        HTTPException: If user is inactive
-    """
+async def get_current_active_user(current_user: User = Depends(get_current_user)) -> User:
+    """Get current active user"""
     if not current_user.is_active:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, 
-            detail="Inactive user"
-        )
+        raise HTTPException(status_code=400, detail="Inactive user")
     return current_user
 
 # ================================
 # AUTHENTICATION ENDPOINTS
 # ================================
 
-@auth_router.post("/register", response_model=RegisterResponse, status_code=status.HTTP_201_CREATED)
-async def register_user(user_data: UserCreate):
-    """
-    Register a new user account
-    
-    Args:
-        user_data: User registration data
-        
-    Returns:
-        Registration response with user info and optional token
-        
-    Raises:
-        HTTPException: If user already exists or validation fails
-    """
+@router.post("/register", response_model=RegisterResponse)
+async def register_user(user_data: UserCreate, db: Session = Depends(get_db)):
+    """Register a new user"""
     try:
-        # Validate and clean user data
-        user_dict = validate_user_data(user_data.dict())
-        
         # Check if user already exists
-        if user_exists(user_dict["email"], user_dict["username"]):
+        if user_exists(db, user_data.email, user_data.username):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="User with this email or username already exists"
             )
         
-        # Validate password strength
-        password_validation = validate_password_strength(user_dict["password"])
-        if not password_validation["is_valid"]:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail={
-                    "message": "Password does not meet requirements",
-                    "errors": password_validation["errors"]
-                }
-            )
-        
-        # Hash the password
-        hashed_password = get_password_hash(user_dict["password"])
+        # Hash password
+        hashed_password = pwd_context.hash(user_data.password)
         
         # Create user in database
-        new_user = UserInDB(
-            email=user_dict["email"],
-            username=user_dict["username"],
-            full_name=user_dict.get("full_name"),
-            hashed_password=hashed_password,
-            is_active=True
+        db_user = create_user_in_db(db, user_data, hashed_password)
+        
+        # Convert to response format
+        user_response = convert_user_to_response(db_user)
+        
+        # Create access token
+        access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+        access_token = create_access_token(
+            data={"sub": db_user.email, "user_id": db_user.id},
+            expires_delta=access_token_expires
         )
         
-        created_user = create_user_in_db(new_user)
-        
-        # Create user response (no sensitive data)
-        user_response = UserResponse(
-            id=created_user.id,
-            email=created_user.email,
-            username=created_user.username,
-            full_name=created_user.full_name,
-            is_active=created_user.is_active,
-            created_at=created_user.created_at,
-            updated_at=created_user.updated_at,
-            last_login=created_user.last_login
-        )
-        
-        # Optionally create token for immediate login after registration
-        token_data = create_user_tokens({
-            "id": created_user.id,
-            "email": created_user.email,
-            "username": created_user.username,
-            "full_name": created_user.full_name
-        })
-        
+        # Create token response
         token = Token(
-            access_token=token_data["access_token"],
-            token_type=token_data["token_type"],
-            expires_in=token_data["expires_in"],
+            access_token=access_token,
+            token_type="bearer",
+            expires_in=ACCESS_TOKEN_EXPIRE_MINUTES * 60,
             user=user_response
         )
+        
+        logger.info(f"User registered successfully: {db_user.email}")
         
         return RegisterResponse(
             message="User registered successfully",
@@ -189,288 +180,283 @@ async def register_user(user_data: UserCreate):
         
     except HTTPException:
         raise
-    except ValidationError as e:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={"message": "Validation error", "errors": e.errors()}
-        )
     except Exception as e:
+        logger.error(f"Registration error: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Registration failed: {str(e)}"
+            detail="Registration failed"
         )
 
-@auth_router.post("/login", response_model=LoginResponse)
-async def login_user(user_credentials: UserLogin):
-    """
-    Authenticate user and return access token
-    
-    Args:
-        user_credentials: User login credentials (email and password)
-        
-    Returns:
-        Login response with authentication token
-        
-    Raises:
-        HTTPException: If credentials are invalid
-    """
+@router.post("/login", response_model=LoginResponse)
+async def login_user(login_data: UserLogin, db: Session = Depends(get_db)):
+    """Authenticate user and return access token"""
     try:
-        # Get user by email
-        user = get_user_by_email(user_credentials.email)
+        # Verify user credentials
+        user = verify_user_password(db, login_data.email, login_data.password, pwd_context)
         if not user:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid email or password"
+                detail="Incorrect email or password",
+                headers={"WWW-Authenticate": "Bearer"},
             )
         
         # Check if user is active
         if not user.is_active:
             raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Account is disabled"
-            )
-        
-        # Verify password
-        if not verify_password(user_credentials.password, user.hashed_password):
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid email or password"
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Inactive user account"
             )
         
         # Update last login time
-        user.update_login_time()
-        update_user_in_db(user.email, {"last_login": user.last_login})
+        update_user_login_time(db, user.id)
         
-        # Create tokens
-        token_data = create_user_tokens({
-            "id": user.id,
-            "email": user.email,
-            "username": user.username,
-            "full_name": user.full_name
-        })
-        
-        # Create user response
-        user_response = UserResponse(
-            id=user.id,
-            email=user.email,
-            username=user.username,
-            full_name=user.full_name,
-            is_active=user.is_active,
-            created_at=user.created_at,
-            updated_at=user.updated_at,
-            last_login=user.last_login
+        # Create access token
+        access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+        access_token = create_access_token(
+            data={"sub": user.email, "user_id": user.id},
+            expires_delta=access_token_expires
         )
         
+        # Convert user to response format
+        user_response = convert_user_to_response(user)
+        
+        # Create token response
         token = Token(
-            access_token=token_data["access_token"],
-            token_type=token_data["token_type"],
-            expires_in=token_data["expires_in"],
+            access_token=access_token,
+            token_type="bearer",
+            expires_in=ACCESS_TOKEN_EXPIRE_MINUTES * 60,
             user=user_response
         )
         
+        logger.info(f"User logged in successfully: {user.email}")
+        
         return LoginResponse(
             message="Login successful",
-            token=token,
-            data={"login_time": user.last_login.isoformat() if user.last_login else None}
+            token=token
         )
         
     except HTTPException:
         raise
     except Exception as e:
+        logger.error(f"Login error: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Login failed: {str(e)}"
+            detail="Login failed"
         )
 
-@auth_router.post("/login/form")
-async def login_form(
-    email: str = Form(...),
-    password: str = Form(...)
+# ================================
+# USER PROFILE ENDPOINTS
+# ================================
+
+@router.get("/me", response_model=UserResponse)
+async def get_current_user_profile(current_user: User = Depends(get_current_active_user)):
+    """Get current user profile"""
+    return convert_user_to_response(current_user)
+
+@router.put("/me", response_model=UserResponse)
+async def update_current_user_profile(
+    update_data: UserUpdate,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
 ):
-    """
-    Form-based login endpoint (for form data instead of JSON)
-    
-    Args:
-        email: User email from form
-        password: User password from form
-        
-    Returns:
-        Same as regular login endpoint
-    """
-    user_credentials = UserLogin(email=email, password=password)
-    return await login_user(user_credentials)
-
-@auth_router.get("/me", response_model=UserResponse)
-async def get_current_user_info(current_user: UserInDB = Depends(get_current_active_user)):
-    """
-    Get current authenticated user information
-    
-    Args:
-        current_user: Current authenticated user from dependency
-        
-    Returns:
-        Current user information (no sensitive data)
-    """
-    return UserResponse(
-        id=current_user.id,
-        email=current_user.email,
-        username=current_user.username,
-        full_name=current_user.full_name,
-        is_active=current_user.is_active,
-        created_at=current_user.created_at,
-        updated_at=current_user.updated_at,
-        last_login=current_user.last_login
-    )
-
-@auth_router.post("/refresh")
-async def refresh_token(refresh_token: str = Form(...)):
-    """
-    Refresh access token using refresh token
-    
-    Args:
-        refresh_token: Valid refresh token
-        
-    Returns:
-        New access token
-        
-    Raises:
-        HTTPException: If refresh token is invalid
-    """
+    """Update current user profile"""
     try:
-        new_access_token = refresh_access_token(refresh_token)
-        if not new_access_token:
+        # Check if email/username already exists (if being updated)
+        if update_data.email and update_data.email != current_user.email:
+            if get_user_by_email(db, update_data.email):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Email already in use"
+                )
+        
+        if update_data.username and update_data.username != current_user.username:
+            if get_user_by_username(db, update_data.username):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Username already in use"
+                )
+        
+        # Update user
+        from models.user import update_user_in_db
+        updated_user = update_user_in_db(db, current_user.id, update_data)
+        
+        if not updated_user:
             raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid refresh token"
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to update user"
             )
         
-        return {
-            "access_token": new_access_token,
-            "token_type": "bearer",
-            "expires_in": settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60
-        }
+        logger.info(f"User profile updated: {updated_user.email}")
+        return convert_user_to_response(updated_user)
         
     except HTTPException:
         raise
     except Exception as e:
+        logger.error(f"Profile update error: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Token refresh failed: {str(e)}"
+            detail="Profile update failed"
         )
 
-@auth_router.post("/logout")
-async def logout_user(current_user: UserInDB = Depends(get_current_active_user)):
-    """
-    Logout current user (placeholder - token invalidation would happen client-side)
-    
-    Args:
-        current_user: Current authenticated user
-        
-    Returns:
-        Logout confirmation
-    """
-    # In a real implementation, you might:
-    # 1. Add token to a blacklist
-    # 2. Store logout time in database
-    # 3. Clear any server-side sessions
-    
-    return {
-        "message": "Logout successful",
-        "user": current_user.username,
-        "logout_time": datetime.utcnow().isoformat()
-    }
-
 # ================================
-# UTILITY ENDPOINTS
+# DEBUG ENDPOINTS (for troubleshooting)
 # ================================
 
-@auth_router.get("/validate-token")
-async def validate_token_endpoint(current_user: UserInDB = Depends(get_current_active_user)):
-    """
-    Validate if current token is still valid
-    
-    Args:
-        current_user: Current authenticated user from token
-        
-    Returns:
-        Token validation result
-    """
+@router.get("/debug-database-info")
+async def debug_database_info(db: Session = Depends(get_db)):
+    """Debug endpoint to check database state"""
+    try:
+        info = get_database_users_info(db)
+        return {
+            "database_info": info,
+            "message": "Database connection successful"
+        }
+    except Exception as e:
+        logger.error(f"Database debug error: {e}")
+        return {
+            "error": str(e),
+            "message": "Database connection failed"
+        }
+
+@router.get("/debug-token")
+async def debug_token_validation(current_user: User = Depends(get_current_active_user)):
+    """Debug endpoint to test token validation"""
     return {
-        "valid": True,
-        "user": current_user.username,
-        "expires_at": "Token expiry info would be here"
+        "message": "Token validation successful",
+        "user": convert_user_to_response(current_user),
+        "timestamp": datetime.utcnow().isoformat()
     }
 
-@auth_router.get("/check-email/{email}")
-async def check_email_availability(email: str):
-    """
-    Check if email is available for registration
-    
-    Args:
-        email: Email address to check
+@router.get("/debug-auth-flow")
+async def debug_auth_flow(
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    db: Session = Depends(get_db)
+):
+    """Debug endpoint to analyze authentication flow step by step"""
+    try:
+        result = {
+            "step_1_token_extraction": "PASS",
+            "step_2_token_format": "FAIL",
+            "step_3_token_decode": "FAIL",
+            "step_4_user_lookup": "FAIL",
+            "step_5_user_active": "FAIL"
+        }
         
-    Returns:
-        Email availability status
-    """
-    user = get_user_by_email(email)
-    return {
-        "email": email,
-        "available": user is None,
-        "message": "Email is available" if user is None else "Email is already registered"
-    }
-
-@auth_router.get("/check-username/{username}")
-async def check_username_availability(username: str):
-    """
-    Check if username is available for registration
-    
-    Args:
-        username: Username to check
+        # Step 1: Token extraction
+        token = credentials.credentials
+        if not token:
+            return {"error": "No token provided", "steps": result}
         
-    Returns:
-        Username availability status
-    """
-    user = get_user_by_username(username)
-    return {
-        "username": username,
-        "available": user is None,
-        "message": "Username is available" if user is None else "Username is already taken"
-    }
-
-# ================================
-# ERROR HANDLERS
-# ================================
-
-@auth_router.get("/debug/users")
-async def debug_users(current_user: UserInDB = Depends(get_current_active_user)):
-    """
-    Debug endpoint to list all users (development only)
-    Remove this in production!
-    
-    Args:
-        current_user: Current authenticated user
+        # Step 2: Token format check
+        result["step_2_token_format"] = "PASS"
         
-    Returns:
-        List of all users (no sensitive data)
-    """
-    from models.user import get_all_users, get_user_count
-    
-    all_users = get_all_users()
-    user_list = []
-    
-    for user in all_users:
-        user_list.append({
-            "id": str(user.id),
+        # Step 3: Token decode
+        token_data = verify_token(token)
+        if not token_data:
+            return {"error": "Token decode failed", "steps": result}
+        
+        result["step_3_token_decode"] = "PASS"
+        result["token_data"] = {
+            "email": token_data.email,
+            "user_id": token_data.user_id,
+            "expires": token_data.exp.isoformat() if token_data.exp else None
+        }
+        
+        # Step 4: User lookup
+        user = get_user_by_email(db, token_data.email)
+        if not user:
+            return {
+                "error": f"User not found in database: {token_data.email}",
+                "steps": result,
+                "debug_info": get_database_users_info(db)
+            }
+        
+        result["step_4_user_lookup"] = "PASS"
+        result["user_found"] = {
+            "id": user.id,
             "email": user.email,
-            "username": user.username,
-            "full_name": user.full_name,
-            "is_active": user.is_active,
-            "created_at": user.created_at.isoformat(),
-            "last_login": user.last_login.isoformat() if user.last_login else None
-        })
-    
-    return {
-        "total_users": get_user_count(),
-        "users": user_list,
-        "current_user": current_user.username
-    }
+            "is_active": user.is_active
+        }
+        
+        # Step 5: User active check
+        if user.is_active:
+            result["step_5_user_active"] = "PASS"
+        
+        return {
+            "message": "Authentication flow analysis complete",
+            "steps": result,
+            "overall_status": "SUCCESS" if all(v == "PASS" for v in result.values()) else "FAILED"
+        }
+        
+    except Exception as e:
+        logger.error(f"Debug auth flow error: {e}")
+        return {
+            "error": str(e),
+            "steps": result
+        }
+
+@router.post("/debug-create-test-user")
+async def debug_create_test_user(db: Session = Depends(get_db)):
+    """Debug endpoint to create a test user"""
+    try:
+        # Check if test user already exists
+        existing_user = get_user_by_email(db, "test@gertie.ai")
+        if existing_user:
+            return {
+                "message": "Test user already exists",
+                "user": convert_user_to_response(existing_user)
+            }
+        
+        # Create test user
+        test_user_data = UserCreate(
+            email="test@gertie.ai",
+            username="testuser",
+            full_name="Test User",
+            password="TestPassword123",
+            confirm_password="TestPassword123"
+        )
+        
+        hashed_password = pwd_context.hash(test_user_data.password)
+        db_user = create_user_in_db(db, test_user_data, hashed_password)
+        
+        return {
+            "message": "Test user created successfully",
+            "user": convert_user_to_response(db_user),
+            "login_credentials": {
+                "email": "test@gertie.ai",
+                "password": "TestPassword123"
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"Test user creation error: {e}")
+        return {"error": str(e)}
+
+# ================================
+# HEALTH CHECK ENDPOINT
+# ================================
+
+@router.get("/health")
+async def auth_health_check(db: Session = Depends(get_db)):
+    """Health check for authentication system"""
+    try:
+        # Test database connection
+        user_count = db.query(User).count()
+        
+        return {
+            "status": "healthy",
+            "database_connection": "connected",
+            "user_count": user_count,
+            "jwt_config": {
+                "algorithm": ALGORITHM,
+                "token_expires_minutes": ACCESS_TOKEN_EXPIRE_MINUTES
+            },
+            "timestamp": datetime.utcnow().isoformat()
+        }
+    except Exception as e:
+        logger.error(f"Auth health check failed: {e}")
+        return {
+            "status": "unhealthy",
+            "error": str(e),
+            "timestamp": datetime.utcnow().isoformat()
+        }

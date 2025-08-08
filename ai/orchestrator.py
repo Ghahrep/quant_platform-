@@ -21,6 +21,8 @@ from .agents import (
     BaseFinancialAgent
 )
 
+from .conversation_manager import AutoGenConversationManager
+
 logger = logging.getLogger(__name__)
 
 
@@ -47,6 +49,8 @@ class FinancialOrchestrator:
         
         self.agents: Dict[str, BaseFinancialAgent] = {}
         self._initialize_agents()
+
+        self.conversation_manager = AutoGenConversationManager()
         
         self.query_history = []
         
@@ -82,7 +86,8 @@ class FinancialOrchestrator:
             "strategy_design": [r"design.*strategy|create.*strategy|build.*strategy"],
             "rebalancing": [r"rebalance|optimize.*portfolio|allocation|weights"],
             "analysis": [r"analyze|calculate|compute|measure|assess|evaluate"],
-            "monitoring": [r"monitor|watch|alert|track|surveillance|observe"]
+            "monitoring": [r"monitor|watch|alert|track|surveillance|observe"],
+            "strategic_planning": [r"fix my portfolio|develop a plan|comprehensive strategy|my overall approach"]
         }
 
     def classify_query(self, query: str) -> QueryClassificationResult:
@@ -139,7 +144,12 @@ class FinancialOrchestrator:
         )
 
     async def process_query(self, query: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
-        """Upgraded hybrid approach with sequential workflow routing."""
+        """
+        Upgraded hybrid approach with a three-tier router:
+        1. Group Chat for strategic planning
+        2. Sequential Workflow for multi-step tasks
+        3. Single Agent / Claude for simple tasks
+        """
         import os
         print(f"🔑 DEBUG: ANTHROPIC_API_KEY exists: {'ANTHROPIC_API_KEY' in os.environ}")
         
@@ -150,12 +160,23 @@ class FinancialOrchestrator:
         classification = self.classify_query(query)
         print(f"[FinancialOrchestrator] Classification: {classification.query_type} (confidence: {classification.confidence:.2f}, complexity: {classification.complexity})")
         
-        # 2. --- NEW TOP-LEVEL ROUTER ---
-        # First, check if this is a multi-step query that requires a workflow.
-        if classification.complexity == 'multi-step':
+        # 2. --- NEW THREE-TIER ROUTER ---
+
+        # Tier 1: Check for highly complex queries that require a collaborative group chat.
+        if classification.query_type == 'strategic_planning':
+            print("🤝 ROUTING TO MULTI-AGENT GROUP CHAT...")
+            # Define the expert panel for this type of complex task
+            participants = ['quantitative_analyst', 'strategy_architect', 'strategy_rebalancing']
+            result = await self.conversation_manager.start_conversation(participants, query, context)
+            # For now, we return the placeholder message from the manager.
+            # In the next step, this will return the actual conversation transcript.
+            return {"success": True, "message": result.get("result", {}).get("final_answer", "Group chat finished.")}
+
+        # Tier 2: Check for multi-step queries that require a sequential workflow.
+        elif classification.complexity == 'multi-step':
             return await self._handle_sequential_workflow(query, classification, context)
         
-        # If not multi-step, proceed with the previous single-step routing logic.
+        # Tier 3: If not a group chat or sequential task, proceed with the standard single-step logic.
         else:
             has_portfolio_context = portfolio_context is not None
             portfolio_specialist_agents = ["rebalancing", "analysis"]

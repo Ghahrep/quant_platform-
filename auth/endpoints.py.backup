@@ -7,24 +7,19 @@ from typing import List, Dict, Any, Optional
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 import logging
-from pydantic import BaseModel
-from datetime import datetime
 
 # Import database and models
 from core.database import get_db
 from models.portfolio import (
     PortfolioPosition, PositionCreate, PositionUpdate, PositionResponse,
-    PortfolioSummary,
-    PortfolioResponse as PortfolioResponseSchema,  # Aliased for clarity
+    PortfolioSummary, PortfolioResponse,
     get_user_portfolio, get_position_by_id, get_position_by_symbol,
     create_position, update_position, delete_position,
     calculate_portfolio_summary, convert_position_to_response,
     save_user_portfolio, create_sample_portfolio, get_portfolio_symbols,
-    update_position_prices,
-    upsert_position_from_transaction
+    update_position_prices
 )
 from models.user import User
-from auth.endpoints import get_current_active_user
 
 
 # Configure logging
@@ -34,42 +29,33 @@ logger = logging.getLogger(__name__)
 # Create router
 router = APIRouter(prefix="/api/v1/portfolios", tags=["portfolios"])
 
-# Pydantic model for the incoming CSV data, defined once
-class TransactionInput(BaseModel):
-    symbol: str
-    quantity: float
-    unit_cost: float
-    transaction_date: Optional[datetime] = None
-
 # ================================
 # PORTFOLIO ENDPOINTS
 # ================================
 
-@router.get("/me", response_model=PortfolioResponseSchema)
+@router.get("/me", response_model=PortfolioResponse)
 async def get_my_portfolio(
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
     """Get current user's complete portfolio"""
     try:
+        # Get portfolio positions
         positions = get_user_portfolio(db, current_user.id)
         position_responses = [convert_position_to_response(pos) for pos in positions]
-        summary = calculate_portfolio_summary(db, current_user.id)
         
-        if positions:
-            last_updated = max(pos.updated_at or pos.created_at for pos in positions)
-        else:
-            last_updated = None
+        # Calculate summary
+        summary = calculate_portfolio_summary(db, current_user.id)
         
         logger.info(f"Retrieved portfolio for user {current_user.email}: {len(positions)} positions")
         
-        # Use the correct aliased schema for the return object
-        return PortfolioResponseSchema(
+        return PortfolioResponse(
             user_id=current_user.id,
             positions=position_responses,
             summary=summary,
-            last_updated=last_updated
+            last_updated=max([pos.updated_at or pos.created_at for pos in positions], default=None)
         )
+        
     except Exception as e:
         logger.error(f"Error retrieving portfolio for user {current_user.id}: {e}")
         raise HTTPException(
@@ -82,10 +68,11 @@ async def get_portfolio_positions(
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
-    """Get all positions in user's portfolio. Uses PositionResponse for single positions."""
+    """Get all positions in user's portfolio"""
     try:
         positions = get_user_portfolio(db, current_user.id)
         return [convert_position_to_response(pos) for pos in positions]
+        
     except Exception as e:
         logger.error(f"Error retrieving positions for user {current_user.id}: {e}")
         raise HTTPException(
@@ -103,6 +90,7 @@ async def get_portfolio_summary(
         summary = calculate_portfolio_summary(db, current_user.id)
         logger.info(f"Portfolio summary for user {current_user.email}: {summary.total_positions} positions, ${summary.total_market_value:,.2f} value")
         return summary
+        
     except Exception as e:
         logger.error(f"Error calculating portfolio summary for user {current_user.id}: {e}")
         raise HTTPException(
@@ -122,15 +110,20 @@ async def add_position(
 ):
     """Add new position to portfolio"""
     try:
+        # Check if position already exists
         existing_position = get_position_by_symbol(db, position_data.symbol, current_user.id)
         if existing_position:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Position for {position_data.symbol} already exists. Use PUT to update."
             )
+        
+        # Create new position
         new_position = create_position(db, position_data, current_user.id)
+        
         logger.info(f"Added position for user {current_user.email}: {position_data.symbol}")
         return convert_position_to_response(new_position)
+        
     except HTTPException:
         raise
     except Exception as e:
@@ -150,13 +143,21 @@ async def get_position(
     try:
         position = get_position_by_id(db, position_id, current_user.id)
         if not position:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Position not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Position not found"
+            )
+        
         return convert_position_to_response(position)
+        
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error retrieving position {position_id} for user {current_user.id}: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to retrieve position")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to retrieve position"
+        )
 
 @router.put("/positions/{position_id}", response_model=PositionResponse)
 async def update_position_endpoint(
@@ -169,14 +170,22 @@ async def update_position_endpoint(
     try:
         updated_position = update_position(db, position_id, current_user.id, update_data)
         if not updated_position:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Position not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Position not found"
+            )
+        
         logger.info(f"Updated position {position_id} for user {current_user.email}")
         return convert_position_to_response(updated_position)
+        
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error updating position {position_id} for user {current_user.id}: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to update position")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to update position"
+        )
 
 @router.delete("/positions/{position_id}")
 async def delete_position_endpoint(
@@ -188,62 +197,26 @@ async def delete_position_endpoint(
     try:
         success = delete_position(db, position_id, current_user.id)
         if not success:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Position not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Position not found"
+            )
+        
         logger.info(f"Deleted position {position_id} for user {current_user.email}")
         return {"message": "Position deleted successfully"}
+        
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error deleting position {position_id} for user {current_user.id}: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to delete position")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to delete position"
+        )
 
 # ================================
 # BULK OPERATIONS
 # ================================
-
-@router.post("/upload-csv", response_model=PortfolioResponseSchema)
-async def upload_csv_portfolio(
-    transactions: List[TransactionInput],
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_active_user),
-):
-    """
-    Receives a list of transactions from a CSV file, aggregates them,
-    and creates or updates positions in the user's portfolio.
-    """
-    if not transactions:
-        raise HTTPException(status_code=400, detail="Transaction list cannot be empty.")
-
-    logger.info(f"Starting CSV upload for user {current_user.email} with {len(transactions)} transactions.")
-
-    try:
-        # Process all transactions in the session
-        for tx in transactions:
-            upsert_position_from_transaction(db=db, user_id=current_user.id, transaction_data=tx.dict())
-
-        # Commit the entire transaction at once
-        db.commit()
-
-        # --- FIX: Fetch the final state AFTER the commit ---
-        # The objects are now correctly stored in the database.
-        final_positions = get_user_portfolio(db, current_user.id)
-        summary = calculate_portfolio_summary(db, current_user.id) # This uses the same function to get fresh data
-
-        logger.info(f"Successfully processed and retrieved portfolio for user {current_user.email}.")
-
-        return PortfolioResponseSchema(
-            user_id=current_user.id,
-            positions=[convert_position_to_response(p) for p in final_positions],
-            summary=summary,
-            last_updated=datetime.utcnow()
-        )
-    except Exception as e:
-        db.rollback() # Rollback the transaction on any error
-        logger.error(f"Error during CSV upload for user {current_user.id}: {e}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred processing the file.",
-        )
 
 @router.post("/bulk-save", response_model=List[PositionResponse])
 async def save_portfolio_bulk(
@@ -253,12 +226,18 @@ async def save_portfolio_bulk(
 ):
     """Save entire portfolio (replaces existing positions)"""
     try:
+        # Use legacy function for bulk save
         positions = save_user_portfolio(db, current_user.id, portfolio_data)
+        
         logger.info(f"Bulk saved portfolio for user {current_user.email}: {len(positions)} positions")
         return [convert_position_to_response(pos) for pos in positions]
+        
     except Exception as e:
         logger.error(f"Error bulk saving portfolio for user {current_user.id}: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to save portfolio")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to save portfolio"
+        )
 
 @router.post("/update-prices")
 async def update_portfolio_prices(
@@ -268,22 +247,34 @@ async def update_portfolio_prices(
 ):
     """Update current prices for portfolio positions"""
     try:
+        # Get user's portfolio symbols to validate updates
         user_symbols = get_portfolio_symbols(db, current_user.id)
-        filtered_updates = {symbol: price for symbol, price in price_updates.items() if symbol.upper() in user_symbols}
+        
+        # Filter price updates to only include user's symbols
+        filtered_updates = {
+            symbol: price for symbol, price in price_updates.items() 
+            if symbol.upper() in user_symbols
+        }
         
         if not filtered_updates:
             return {"message": "No matching positions found for price updates", "updated_count": 0}
         
+        # Update prices
         updated_count = update_position_prices(db, filtered_updates)
+        
         logger.info(f"Updated prices for user {current_user.email}: {updated_count} positions")
         return {
             "message": f"Updated prices for {updated_count} positions",
             "updated_count": updated_count,
             "symbols_updated": list(filtered_updates.keys())
         }
+        
     except Exception as e:
         logger.error(f"Error updating prices for user {current_user.id}: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to update prices")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to update prices"
+        )
 
 # ================================
 # PORTFOLIO ANALYSIS ENDPOINTS
